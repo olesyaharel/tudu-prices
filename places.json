@@ -8,5 +8,9 @@
   "city": "ראשון לציון",
   "address": "מורשת ישראל 15"
  },
- "yohananof-8": "רחובות"
+ "yohananof-8": "רחובות",
+ "yohananof-1": {
+  "city": "רחובות",
+  "address": "המפוח 11"
+ }
 }

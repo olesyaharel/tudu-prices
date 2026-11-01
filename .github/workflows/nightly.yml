@@ -31,7 +31,7 @@ jobs:
           git config user.name "tudu-prices bot"
           git config user.email "actions@users.noreply.github.com"
           git add geocode.json cities.json
-          git diff --cached --quiet || (git commit -m "New branch locations" && git push)
+          git diff --cached --quiet || (git commit -m "New branch locations" && git pull --rebase && git push)
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with: { path: out }
