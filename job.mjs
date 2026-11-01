@@ -36,20 +36,29 @@ async function cityNames() {
 // that isn't also a common word (אזור, רחוב). ALIASES: short forms and well-known places the chains write instead of the town
 const ALIASES = { 'ת"א': 'תל אביב - יפו', 'יד אליהו': 'תל אביב - יפו', 'ראשלצ': 'ראשון לציון', 'ראשל"צ': 'ראשון לציון', 'ב"ש': 'באר שבע',
   'פ"ת': 'פתח תקווה', 'כ"ס': 'כפר סבא', 'עקרון': 'קרית עקרון', 'פולג': 'נתניה', 'חוצות המפרץ': 'חיפה', 'צור יגאל': 'כוכב יאיר-צור יגאל',
-  'דלית אל כרמל': 'דאלית אל-כרמל', 'מישור אדומים': 'מעלה אדומים', 'ויתקין': 'כפר ויתקין' };
+  'דלית אל כרמל': 'דאלית אל-כרמל', 'מישור אדומים': 'מעלה אדומים', 'ויתקין': 'כפר ויתקין', 'טירת הכרמל': 'טירת כרמל' };
 const WORDS = new Set(['אזור', 'רחוב', 'מרכז', 'שדרות', 'נווה', 'רמות']);
+const PREFIX = new Set(['כפר', 'קרית', 'נווה', 'נוה', 'גבעת', 'רמת', 'בית', 'תל', 'עין', 'מושב', 'קיבוץ', 'שכונת', 'רחוב', 'שדרות']);
 const isTown = c => c && !/^\d+$/.test(c);
 // places.json: where a branch is, told by hand, for branches the files and guesses can't place:
 // branch key → town or place ("מחלף לטרון"), or {city, address} when the file's address is missing or wrong
 const places = fs.existsSync(PLACES) ? JSON.parse(fs.readFileSync(PLACES)) : {};
+// Branch names are matched word by word, ignoring marks and doubled letters only ("קרית גת*" = "קריית גת", "סכנין" =
+// "סח'נין"); dropping all vowel letters, as for map answers, would make short names collide (בילו = אביאל)
+const mild = s => s.replace(/ח['׳]/g, 'כ').replace(/["'״׳`*.]/g, '').replace(/יי/g, 'י').replace(/וו/g, 'ו');
+const words = t => t.replace(/[-,()]/g, ' ').split(/\s+/).map(mild).filter(Boolean);
 function fillCities(list, cities) {
-  const parts = names => names.flatMap(n => [n, ...n.split(/\s*-\s*/)].filter(p => p.length > 2).map(p => [p, n])).sort((a, b) => b[0].length - a[0].length);
-  const near = parts([...new Set(list.map(b => b.city).filter(isTown))]).concat(Object.entries(ALIASES));
-  const all = new Set(Object.values(cities)), any = parts([...all]).filter(([p]) => p.length > 3 && !WORDS.has(p));
+  const parts = names => names.flatMap(n => [n, ...n.split(/\s*-\s*/)].filter(p => p.length > 2).map(p => [words(p), n])).sort((a, b) => b[0].join('').length - a[0].join('').length);
+  const near = parts([...new Set(list.map(b => b.city).filter(isTown))]).concat(Object.entries(ALIASES).map(([p, n]) => [words(p), n]));
+  const all = new Set(Object.values(cities).map(c => words(c).join(' '))), any = parts(Object.values(cities)).filter(([w]) => w.join('').length > 2 && !(w.length === 1 && WORDS.has(w[0])));
   for (const b of list) if (places[b.k]) Object.assign(b, typeof places[b.k] === 'string' ? { city: places[b.k] } : places[b.k]);
   for (const b of list) if (!isTown(b.city)) {
-    const name = ` ${b.name} `.replace(/[-,()]/g, ' ').replace(/\s+/g, ' '), found = t => t.find(([p]) => name.includes(` ${p} `))?.[1];
-    b.city = found(near) || [b.name.trim(), b.address.trim()].find(t => all.has(t)) || found(any) || '';
+    // the town written first in the name wins ("ראשל"צ ירושלים 120" is a street in Rishon), then the longer one; a word
+    // right after כפר, קרית… belongs to a longer name ("כפר עזר" isn't the moshav עזר)
+    const name = words(b.name), at = w => name.findIndex((_, i) => !PREFIX.has(name[i - 1]) && w.every((x, j) => name[i + j] === x));
+    const found = t => t.map(([w, n]) => [at(w), n]).filter(([i]) => i >= 0).sort((a, b) => a[0] - b[0])[0]?.[1];
+    const whole = [b.name, b.address].map(t => words(t).join(' ')).find(t => all.has(t));
+    b.city = found(near) || (whole && Object.values(cities).find(c => words(c).join(' ') === whole)) || found(any) || '';
   }
 }
 
@@ -127,8 +136,9 @@ async function locate(s, city) {
   return c ? { lat: c[0], lng: c[1], approx: 'town' } : {};
 }
 
-// Online shops and warehouses have no street to walk into (an online shop may give its web address instead of a street)
-const SKIP = /online|אונליין|אינטרנט|www\.|https?:\/\/|משלוחים|מחסן|מרלו"ג|לוגיסט/i;
+// Online shops and warehouses have no street to walk into (an online shop may give its web address instead of a street;
+// "וולט …" branches are Wolt's delivery-only stores)
+const SKIP = /online|אונליין|אינטרנט|www\.|https?:\/\/|משלוחים|מחסן|מרלו"ג|לוגיסט|וולט|wolt/i;
 const pool = async (list, fn) => { let i = 0; await Promise.all(Array.from({ length: PARALLEL }, async () => { while (i < list.length) { const x = list[i++]; await fn(x); } })); };
 
 const cities = await cityNames();
