@@ -2,7 +2,7 @@
 name: nightly prices
 on:
   schedule:
-    - cron: '30 3 * * *'   # 03:30 UTC = 05:30/06:30 in Israel, after the chains publish their full files
+    - cron: '30 4 * * *'   # 04:30 UTC = 06:30/07:30 in Israel: after the chains publish (Carrefour about 05:10) and after local.sh (05:45)
   workflow_dispatch:        # "Run workflow" button, for a run by hand
 permissions:
   contents: write           # to save new branch locations (geocode.json)
@@ -18,7 +18,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - run: node job.mjs
+      - name: Carrefour and Hatzi Hinam, fetched by the computer in Israel (local.sh)
+        run: mkdir israel && (gh release download israel -p local.tgz -D israel && tar xzf israel/local.tgz -C israel || echo "no run from Israel")
+        env: { GH_TOKEN: '${{ github.token }}' }
+      - run: node job.mjs --merge=israel
       - name: Save new locations
         run: |
           git config user.name "tudu-prices bot"

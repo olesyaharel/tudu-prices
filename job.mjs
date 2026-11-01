@@ -1,18 +1,24 @@
 // The nightly price job: every branch of every chain we can read → out/
-//   out/branches.json          [{k, chain, chainName, name, address, city, lat, lng, n, updated}]
+//   out/branches.json          [{k, chain, chainName, name, sub, address, city, lat, lng, approx?, n}]
 //   out/prices/<k>.json        {code: price}               (one file per branch, small)
 //   out/items/<chain>.json     {code: [name, qty, unit, weighted, maker]}
 //   out/report.json            what worked, what failed, how long it took
-// Run: node tools/prices/job.mjs [--chains=RamiLevi,carrefour] [--limit=5]
+// Run: node job.mjs [--chains=RamiLevi,carrefour] [--limit=5] [--out=dir] [--merge=dir] [--no-locate] [--locate-only]
+//   --merge=dir    fold in a run made elsewhere: Carrefour and Hatzi Hinam refuse servers abroad, so a computer in Israel
+//                  fetches them (local.sh) and this job takes its chains as they are, without fetching them again
+//   --no-locate    leave missing cities and branch locations out (the computer in Israel leaves them to this job)
+//   --locate-only  only redo cities and locations in an existing branches.json
 import fs from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SOURCES } from './sources.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
-const OUT = HERE + 'out/', GEO = HERE + 'geocode.json', CITIES = HERE + 'cities.json';
 const arg = k => process.argv.find(a => a.startsWith(`--${k}=`))?.split('=')[1];
-const CHAINS = arg('chains') ? arg('chains').split(',') : Object.keys(SOURCES);
-const LIMIT = +arg('limit') || Infinity, PARALLEL = 6;
+const flag = k => process.argv.includes(`--${k}`);
+const OUT = path.resolve(arg('out') || HERE + 'out') + '/', MERGE = arg('merge') && path.resolve(arg('merge')) + '/';
+const GEO = HERE + 'geocode.json', CITIES = HERE + 'cities.json';
+const LIMIT = +arg('limit') || Infinity, PARALLEL = 6, MAX_MERGE_AGE_H = 36;
 for (const d of ['', 'prices', 'items']) fs.mkdirSync(OUT + d, { recursive: true });
 const started = Date.now(), log = (...a) => console.log(`[${((Date.now() - started) / 1000).toFixed(0)}s]`, ...a);
 
@@ -24,6 +30,25 @@ async function cityNames() {
   fs.writeFileSync(CITIES, JSON.stringify(m)); return m;
 }
 
+// Other chains leave the city out (0, or a code that isn't a settlement); it is usually in the branch name
+// ("יוחננוף קרית שמונה"). Towns that other branches are in come first, then a name or address that is nothing but a town
+// ("אור יהודה"; streets are named after towns, so an address never counts otherwise), then any settlement in the name
+// that isn't also a common word (אזור, רחוב). ALIASES: short forms and well-known places the chains write instead of the town
+const ALIASES = { 'ת"א': 'תל אביב - יפו', 'יד אליהו': 'תל אביב - יפו', 'ראשלצ': 'ראשון לציון', 'ראשל"צ': 'ראשון לציון', 'ב"ש': 'באר שבע',
+  'פ"ת': 'פתח תקווה', 'כ"ס': 'כפר סבא', 'עקרון': 'קרית עקרון', 'פולג': 'נתניה', 'חוצות המפרץ': 'חיפה', 'צור יגאל': 'כוכב יאיר-צור יגאל',
+  'דלית אל כרמל': 'דאלית אל-כרמל', 'מישור אדומים': 'מעלה אדומים', 'ויתקין': 'כפר ויתקין' };
+const WORDS = new Set(['אזור', 'רחוב', 'מרכז', 'שדרות', 'נווה', 'רמות']);
+const isTown = c => c && !/^\d+$/.test(c);
+function fillCities(list, cities) {
+  const parts = names => names.flatMap(n => [n, ...n.split(/\s*-\s*/)].filter(p => p.length > 2).map(p => [p, n])).sort((a, b) => b[0].length - a[0].length);
+  const near = parts([...new Set(list.map(b => b.city).filter(isTown))]).concat(Object.entries(ALIASES));
+  const all = new Set(Object.values(cities)), any = parts([...all]).filter(([p]) => p.length > 3 && !WORDS.has(p));
+  for (const b of list) if (!isTown(b.city)) {
+    const name = ` ${b.name} `.replace(/[-,()]/g, ' ').replace(/\s+/g, ' '), found = t => t.find(([p]) => name.includes(` ${p} `))?.[1];
+    b.city = found(near) || [b.name.trim(), b.address.trim()].find(t => all.has(t)) || found(any) || '';
+  }
+}
+
 // Branch locations: OpenStreetMap's Nominatim (at most one request a second), then Photon for addresses Nominatim
 // doesn't know; every answer is remembered in geocode.json, so later nights only look up new branches
 const geo = fs.existsSync(GEO) ? JSON.parse(fs.readFileSync(GEO)) : {};
@@ -31,10 +56,11 @@ const UA_GEO = { 'User-Agent': 'TuDu-prices/1.0 (grocery list app, branch locati
 let lastGeo = 0, geoQueue = Promise.resolve();
 const remember = (key, v) => { geo[key] = v; fs.writeFileSync(GEO, JSON.stringify(geo)); return v; };
 const pt = (lat, lon) => [+(+lat).toFixed(5), +(+lon).toFixed(5)];
+// Only a real answer is remembered; a refusal or an error page is tried again next night
 const nominatim = q => geoQueue = geoQueue.then(async () => {
   if (q in geo) return geo[q];
   await new Promise(r => setTimeout(r, Math.max(0, lastGeo + 1100 - Date.now()))); lastGeo = Date.now();
-  try { const j = await (await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=il&q=' + encodeURIComponent(q), { headers: UA_GEO })).json(); return remember(q, j[0] ? pt(j[0].lat, j[0].lon) : null); }
+  try { const j = await (await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=il&q=' + encodeURIComponent(q), { headers: UA_GEO })).json(); return Array.isArray(j) ? remember(q, j[0] ? pt(j[0].lat, j[0].lon) : null) : null; }
   catch { return null; }
 });
 // Photon guesses freely, so only an answer in the right town counts
@@ -58,7 +84,7 @@ function cleanAddress(a, city) {
   return /[א-תa-z]{2}/i.test(a) ? a : '';
 }
 async function locate(s, city) {
-  const town = city && !/^\d+$/.test(city) ? townName(city) : '';
+  const town = isTown(city) ? townName(city) : '';
   const addr = cleanAddress(s.address, town);
   if (addr && town) {
     const p = await nominatim(`${addr}, ${town}`) || await photon(`${addr} ${town}`, town);
@@ -68,7 +94,7 @@ async function locate(s, city) {
     if (q) return { lat: q[0], lng: q[1], approx: 'street' };
   }
   const c = town && await nominatim(town);
-  return c ? { lat: c[0], lng: c[1], approx: 'town' } : null;
+  return c ? { lat: c[0], lng: c[1], approx: 'town' } : {};
 }
 
 // Online shops and warehouses have no street to walk into
@@ -76,15 +102,24 @@ const SKIP = /online|אונליין|אינטרנט|www\.|משלוחים|מחסן
 const pool = async (list, fn) => { let i = 0; await Promise.all(Array.from({ length: PARALLEL }, async () => { while (i < list.length) { const x = list[i++]; await fn(x); } })); };
 
 const cities = await cityNames();
-if (process.argv.includes('--locate-only')) {
-  const list = JSON.parse(fs.readFileSync(OUT + 'branches.json'));
-  for (const b of list) if (b.approx || !b.lat) { const { lat, lng, approx, ...rest } = b; Object.assign(b, { ...rest }, await locate(b, b.city)); if (!b.approx) delete b.approx; }
-  fs.writeFileSync(OUT + 'branches.json', JSON.stringify(list.map(b => b.approx ? b : (({ approx, ...x }) => x)(b))));
-  log('town only:', list.filter(b => b.approx === 'town').length, '| street only:', list.filter(b => b.approx === 'street').length, '| none:', list.filter(b => !b.lat).length, 'of', list.length);
-  process.exit(0);
+let branches = [];
+const report = { started: new Date(started).toISOString(), chains: {} };
+
+// A run from the computer in Israel: its chains are taken as they are, unless it is too old to trust (then they are tried here)
+const merged = new Set();
+if (MERGE && fs.existsSync(MERGE + 'report.json')) {
+  const r = JSON.parse(fs.readFileSync(MERGE + 'report.json')), age = (Date.now() - Date.parse(r.started)) / 3600000;
+  if (age > MAX_MERGE_AGE_H) log(`merge: the run from Israel is ${age.toFixed(0)} hours old, not used`);
+  else {
+    for (const d of ['prices', 'items']) fs.cpSync(MERGE + d, OUT + d, { recursive: true });
+    branches.push(...JSON.parse(fs.readFileSync(MERGE + 'branches.json')).map(({ lat, lng, approx, ...b }) => b));
+    for (const [c, rep] of Object.entries(r.chains)) { merged.add(c); report.chains[c] = { ...rep, from: 'israel', at: r.started }; }
+    log('merge:', [...merged].join(', '), `(${age.toFixed(1)} hours old)`);
+  }
 }
-const branches = [], report = { started: new Date(started).toISOString(), chains: {} };
-for (const chain of CHAINS) {
+
+if (flag('locate-only')) branches = JSON.parse(fs.readFileSync(OUT + 'branches.json')).map(({ lat, lng, approx, ...b }) => b);
+else for (const chain of (arg('chains') ? arg('chains').split(',') : Object.keys(SOURCES)).filter(c => !merged.has(c))) {
   const src = SOURCES[chain], rep = report.chains[chain] = { name: src.name, stores: 0, prices: 0, failed: [] };
   try {
     const stores = (await src.stores()).filter(s => !SKIP.test(s.name + ' ' + s.address + ' ' + s.sub));
@@ -100,8 +135,7 @@ for (const chain of CHAINS) {
         const prices = {};
         for (const i of list) { prices[i.code] = i.price; items[i.code] ||= [i.name, i.qty, i.unit, i.weighted ? 1 : 0, i.maker]; }
         fs.writeFileSync(`${OUT}prices/${k}.json`, JSON.stringify(prices));
-        const city = cities[s.city] || s.city;
-        branches.push({ k, chain, chainName: src.name, name: s.name, sub: s.sub, address: s.address, city, ...(await locate(s, city)), n: list.length });
+        branches.push({ k, chain, chainName: src.name, name: s.name, sub: s.sub, address: s.address, city: cities[s.city] || s.city, n: list.length });
         rep.prices++;
       } catch (e) { rep.failed.push(`${s.id} ${s.name}: ${e.message}`); }
     });
@@ -109,8 +143,12 @@ for (const chain of CHAINS) {
     log(chain, 'done:', rep.prices, 'branches,', Object.keys(items).length, 'products,', rep.failed.length, 'failed');
   } catch (e) { rep.error = e.message; log(chain, 'FAILED:', e.message); }
 }
+
+// Missing cities are guessed only where all chains are together (towns of other chains' branches help)
+if (!flag('no-locate')) { fillCities(branches, cities); log('locating', branches.length, 'branches'); for (const b of branches) Object.assign(b, await locate(b, b.city)); }
 branches.sort((a, b) => a.k.localeCompare(b.k));
 fs.writeFileSync(OUT + 'branches.json', JSON.stringify(branches));
-Object.assign(report, { finished: new Date().toISOString(), minutes: +((Date.now() - started) / 60000).toFixed(1), branches: branches.length, noLocation: branches.filter(b => !b.lat).map(b => b.k), approxLocation: branches.filter(b => b.approx).length, townOnly: branches.filter(b => b.approx === 'town').length });
+Object.assign(report, { finished: new Date().toISOString(), minutes: +((Date.now() - started) / 60000).toFixed(1), branches: branches.length,
+  noCity: branches.filter(b => !b.city).map(b => b.k), noLocation: branches.filter(b => !b.lat).map(b => b.k), approxLocation: branches.filter(b => b.approx).length, townOnly: branches.filter(b => b.approx === 'town').length });
 fs.writeFileSync(OUT + 'report.json', JSON.stringify(report, null, 1));
-log('branches with prices:', branches.length, '| no location:', report.noLocation.length, '| approximate:', report.approxLocation);
+log('branches with prices:', branches.length, '| no city:', report.noCity.length, '| no location:', report.noLocation.length, '| approximate:', report.approxLocation);

@@ -2,3 +2,6 @@ out/
 node_modules/
 .DS_Store
 tools-dl/
+local-out/
+local.tgz
+local.log

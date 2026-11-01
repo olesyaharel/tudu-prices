@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Runs local.sh every morning at 05:45, after Carrefour publishes (about 05:10); if the computer sleeps then, it runs on waking.
+     Installed as ~/Library/LaunchAgents/il.tudu.prices.plist (a copy of this file). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>il.tudu.prices</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/zsh</string><string>/Users/olesya/Documents/Cloude-projects/tudu-prices/local.sh</string></array>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/usr/local/bin:/usr/bin:/bin</string></dict>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>5</integer><key>Minute</key><integer>45</integer></dict>
+  <key>StandardOutPath</key><string>/Users/olesya/Documents/Cloude-projects/tudu-prices/local.log</string>
+  <key>StandardErrorPath</key><string>/Users/olesya/Documents/Cloude-projects/tudu-prices/local.log</string>
+</dict>
+</plist>
