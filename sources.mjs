@@ -90,10 +90,41 @@ const hazihinam = {
   prices: async (id, ref) => itemRows(unzip(await bytes(ref)))
 };
 
+// laibcatalog.co.il: a file service some chains use (Victory), with its file list as JSON
+const LAIB = 'https://laibcatalog.co.il/webapi';
+const laib = (edi, name) => {
+  let list; const all = async () => list || (list = await (await get(`${LAIB}/api/getfiles?edi=${edi}`)).json());
+  const url = f => `${LAIB}/${edi}/${encodeURIComponent(f)}`;
+  return {
+    name,
+    stores: async () => { const f = (await all()).filter(f => f.fileType === 'stores').map(f => f.fileName).sort().pop(); if (!f) throw new Error('no Stores file'); return records(unzip(await bytes(url(f))), 'Store').map(storeRow); },
+    files: async () => latestByStore((await all()).filter(f => f.fileType === 'pricefull').map(f => f.fileName)),
+    prices: async (id, ref) => itemRows(unzip(await bytes(url(ref))))
+  };
+};
+
+// binaprojects.com: a site per chain, used by smaller chains; files listed by type (1 stores, 4 full prices), and each
+// download link asked for separately
+const bina = (host, name) => {
+  const B = `https://${host}.binaprojects.com`, post = { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' } };
+  const list = async type => (await (await get(`${B}/MainIO_Hok.aspx`, { ...post, body: new URLSearchParams({ WStore: 0, WDate: '', WFileType: type }) })).json()).map(f => f.FileNm);
+  const file = async f => unzip(await bytes((await (await get(`${B}/Download.aspx?FileNm=${encodeURIComponent(f)}`, { ...post, body: '' })).json())[0].SPath));
+  return {
+    name,
+    stores: async () => { const f = (await list(1)).sort().pop(); if (!f) throw new Error('no Stores file'); return records(await file(f), 'Store').map(storeRow); },
+    files: async () => latestByStore(await list(4)),
+    prices: async (id, ref) => itemRows(await file(ref))
+  };
+};
+
 export const SOURCES = {
   shufersal, carrefour, hazihinam,
   RamiLevi: published('RamiLevi', 'רמי לוי'), osherad: published('osherad', 'אושר עד'), yohananof: published('yohananof', 'יוחננוף'),
   TivTaam: published('TivTaam', 'טיב טעם'), Keshet: published('Keshet', 'קשת טעמים'), freshmarket: published('freshmarket', 'פרשמרקט'),
   SalachD: published('SalachD', 'סאלח דבאח'), Stop_Market: published('Stop_Market', 'סטופ מרקט'), politzer: published('politzer', 'פוליצר'),
-  doralon: published('doralon', 'am:pm')
+  doralon: published('doralon', 'am:pm'),
+  victory: laib('7290696200003', 'ויקטורי'), mshuk: laib('7290661400001', 'מחסני השוק'), hcohen: laib('7290455000004', 'ח. כהן'),
+  kingstore: bina('kingstore', 'קינג סטור'), maayan2000: bina('maayan2000', 'מעיין 2000'), zolvebegadol: bina('zolvebegadol', 'זול ובגדול'),
+  supersapir: bina('supersapir', 'סופר ספיר'), citymarket: bina('citymarketkiryatgat', 'סיטי מרקט'), superbareket: bina('superbareket', 'סופר ברקת'),
+  ktshivuk: bina('ktshivuk', 'משנת יוסף'), shukhayir: bina('shuk-hayir', 'שוק העיר'), shefabirkathashem: bina('shefabirkathashem', 'שפע ברכת השם')
 };

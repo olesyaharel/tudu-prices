@@ -54,30 +54,46 @@ function fillCities(list, cities) {
 }
 
 // Branch locations: OpenStreetMap's Nominatim (at most one request a second), then Photon for addresses Nominatim
-// doesn't know; every answer is remembered in geocode.json, so later nights only look up new branches
+// doesn't know; every answer is remembered in geocode.json, so later nights only look up new branches.
+// Both often put a same-named street in another town first ("טופז 1, חיפה" → Zikhron Ya'akov, "אריאל" → a street in
+// Jerusalem), so only an answer inside the town asked for counts. The search area is a box around Israel rather than the
+// country code, which would leave out Judea and Samaria (אריאל, מעלה אדומים)
 const geo = fs.existsSync(GEO) ? JSON.parse(fs.readFileSync(GEO)) : {};
 const UA_GEO = { 'User-Agent': 'TuDu-prices/1.0 (grocery list app, branch locations)', 'Accept-Language': 'he' };
 let lastGeo = 0, geoQueue = Promise.resolve();
 const remember = (key, v) => { geo[key] = v; fs.writeFileSync(GEO, JSON.stringify(geo)); return v; };
 const pt = (lat, lon) => [+(+lat).toFixed(5), +(+lon).toFixed(5)];
+// Spelling-blind: no spaces or marks, no vowel letters (קריית = קרית, דאלית = דלית), ח' = כ (סח'נין = סכנין)
+const norm = s => (s || '').replace(/ח['׳]/g, 'כ').replace(/[\s\-־–'"״׳`()]/g, '').replace(/[אוי]/g, '');
+// The name must start with the town ("תל־אביב–יפו" for תל אביב), so a neighbourhood like "גבעת אלונים" isn't אלונים
+const sameTown = (name, town) => norm(name).replace(/^מעצהזרת/, '').startsWith(norm(town));
+// Nominatim's answer names the place first and the areas it lies in after: an address must lie in the town itself (not
+// through the street's own name, nor a district named after the town: Hadera is in "מחוז חיפה"), a town must be the place
+const inTown = (r, town, street) => r.display_name.split(',').slice(1).map(x => x.trim())
+  .filter(x => norm(x) !== norm(street) && !/^(נפת|מחוז)\s/.test(x)).some(x => sameTown(x, town));
+const isPlace = (r, town) => (r.class === 'boundary' || r.class === 'place' && !['suburb', 'neighbourhood', 'quarter'].includes(r.type)) && sameTown(r.display_name.split(',')[0], town);
 // Only a real answer is remembered; a refusal or an error page is tried again next night
-const nominatim = q => geoQueue = geoQueue.then(async () => {
-  if (q in geo) return geo[q];
+const ask = (key, q, ok, extra = '') => geoQueue = geoQueue.then(async () => {
+  if (key in geo) return geo[key];
   await new Promise(r => setTimeout(r, Math.max(0, lastGeo + 1100 - Date.now()))); lastGeo = Date.now();
-  try { const j = await (await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=il&q=' + encodeURIComponent(q), { headers: UA_GEO })).json(); return Array.isArray(j) ? remember(q, j[0] ? pt(j[0].lat, j[0].lon) : null) : null; }
+  try { const j = await (await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=5&viewbox=34.2,33.4,35.9,29.4&bounded=1' + extra + '&q=' + encodeURIComponent(q), { headers: UA_GEO })).json();
+    if (!Array.isArray(j)) return null; const r = j.find(ok); return remember(key, r ? pt(r.lat, r.lon) : null); }
   catch { return null; }
 });
+const street = (addr, town) => ask(`street:${addr}|${town}`, `${addr}, ${town}`, r => inTown(r, town, addr.replace(/\s*\d+[א-ת]?$/, '')));
+const townAt = town => ask(`town:${town}`, town, r => isPlace(r, town), '&featureType=settlement');
+// A place told by hand or a named junction is taken as it is
+const placeAt = q => ask(`place:${q}`, q, () => true);
 // Photon guesses freely, so only an answer in the right town counts (or, without a town, a place of exactly that name)
 const photon = async (q, city) => {
   const key = 'photon:' + q; if (key in geo) return geo[key];
   try {
     const j = await (await fetch('https://photon.komoot.io/api/?limit=3&lang=default&bbox=34.2,29.4,35.9,33.4&q=' + encodeURIComponent(q), { headers: UA_GEO })).json();
-    const town = city && city.split(/[\s-]/)[0];
-    const f = j.features.find(f => town ? ['house', 'street'].includes(f.properties.type) && [f.properties.city, f.properties.locality, f.properties.district, f.properties.county].some(x => x && x.includes(town)) : f.properties.name === q);
+    const f = j.features.find(f => city ? ['house', 'street'].includes(f.properties.type) && [f.properties.city, f.properties.locality, f.properties.county].some(x => x && sameTown(x, city)) : f.properties.name === q);
     return remember(key, f ? pt(f.geometry.coordinates[1], f.geometry.coordinates[0]) : null);
   } catch { return null; }
 };
-const townName = c => c.replace(/\s*-\s*יפו$/, '').replace(/^(מודיעין)-.*/, '$1').trim();
+const townName = c => c.replace(/\s*-\s*יפו$/, '').replace(/^(מודיעין)-.*/, '$1').replace(/\s*\(.*\)$/, '').trim();
 // "רח' 9 ככר דיזנגוף פינת ..." → "כיכר דיזנגוף 9"
 function cleanAddress(a, city) {
   a = a.replace(/&#x?[0-9a-f]+;/gi, ' ').replace(/\b(unknown|null)\b/gi, '').replace(/^\d+$/, '');
@@ -100,19 +116,19 @@ async function locate(s, city) {
   const town = isTown(city) ? townName(city) : '';
   const addr = cleanAddress(s.address, town);
   if (addr && town) {
-    const p = await nominatim(`${addr}, ${town}`) || await photon(`${addr} ${town}`, town);
+    const p = await street(addr, town) || await photon(`${addr} ${town}`, town);
     if (p) return { lat: p[0], lng: p[1] };
-    const street = addr.replace(/\s*\d+[א-ת]?$/, '');
-    const q = street !== addr && street.length > 2 && (await nominatim(`${street}, ${town}`) || await photon(`${street} ${town}`, town));
+    const name = addr.replace(/\s*\d+[א-ת]?$/, '');
+    const q = name !== addr && name.length > 2 && (await street(name, town) || await photon(`${name} ${town}`, town));
     if (q) return { lat: q[0], lng: q[1], approx: 'street' };
   }
-  if (!town) { const q = spot(s), p = q && (await nominatim(q) || await photon(q)); return p ? { lat: p[0], lng: p[1], approx: 'place' } : {}; }
-  const c = await nominatim(town);
+  if (!town) { const q = spot(s), p = q && (await placeAt(q) || await photon(q)); return p ? { lat: p[0], lng: p[1], approx: 'place' } : {}; }
+  const c = await townAt(town) || typeof places[s.k] === 'string' && await placeAt(town);
   return c ? { lat: c[0], lng: c[1], approx: 'town' } : {};
 }
 
-// Online shops and warehouses have no street to walk into
-const SKIP = /online|אונליין|אינטרנט|www\.|משלוחים|מחסן|מרלו"ג|לוגיסט/i;
+// Online shops and warehouses have no street to walk into (an online shop may give its web address instead of a street)
+const SKIP = /online|אונליין|אינטרנט|www\.|https?:\/\/|משלוחים|מחסן|מרלו"ג|לוגיסט/i;
 const pool = async (list, fn) => { let i = 0; await Promise.all(Array.from({ length: PARALLEL }, async () => { while (i < list.length) { const x = list[i++]; await fn(x); } })); };
 
 const cities = await cityNames();
