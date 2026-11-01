@@ -1,5 +1,5 @@
 // The nightly price job: every branch of every chain we can read → out/
-//   out/branches.json          [{k, chain, chainName, name, sub, address, city, lat, lng, approx?, n}]
+//   out/branches.json          [{k, chain, chainName, name, sub, address, city, lat, lng, approx?, n}]   approx: street | town | place
 //   out/prices/<k>.json        {code: price}               (one file per branch, small)
 //   out/items/<chain>.json     {code: [name, qty, unit, weighted, maker]}
 //   out/report.json            what worked, what failed, how long it took
@@ -39,13 +39,14 @@ const ALIASES = { 'ת"א': 'תל אביב - יפו', 'יד אליהו': 'תל א
   'דלית אל כרמל': 'דאלית אל-כרמל', 'מישור אדומים': 'מעלה אדומים', 'ויתקין': 'כפר ויתקין' };
 const WORDS = new Set(['אזור', 'רחוב', 'מרכז', 'שדרות', 'נווה', 'רמות']);
 const isTown = c => c && !/^\d+$/.test(c);
-// places.json: where a branch is, told by hand (branch key → town or place), for branches the files and guesses can't place
+// places.json: where a branch is, told by hand, for branches the files and guesses can't place:
+// branch key → town or place ("מחלף לטרון"), or {city, address} when the file's address is missing or wrong
 const places = fs.existsSync(PLACES) ? JSON.parse(fs.readFileSync(PLACES)) : {};
 function fillCities(list, cities) {
   const parts = names => names.flatMap(n => [n, ...n.split(/\s*-\s*/)].filter(p => p.length > 2).map(p => [p, n])).sort((a, b) => b[0].length - a[0].length);
   const near = parts([...new Set(list.map(b => b.city).filter(isTown))]).concat(Object.entries(ALIASES));
   const all = new Set(Object.values(cities)), any = parts([...all]).filter(([p]) => p.length > 3 && !WORDS.has(p));
-  for (const b of list) if (places[b.k]) b.city = places[b.k];
+  for (const b of list) if (places[b.k]) Object.assign(b, typeof places[b.k] === 'string' ? { city: places[b.k] } : places[b.k]);
   for (const b of list) if (!isTown(b.city)) {
     const name = ` ${b.name} `.replace(/[-,()]/g, ' ').replace(/\s+/g, ' '), found = t => t.find(([p]) => name.includes(` ${p} `))?.[1];
     b.city = found(near) || [b.name.trim(), b.address.trim()].find(t => all.has(t)) || found(any) || '';
@@ -66,13 +67,13 @@ const nominatim = q => geoQueue = geoQueue.then(async () => {
   try { const j = await (await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=il&q=' + encodeURIComponent(q), { headers: UA_GEO })).json(); return Array.isArray(j) ? remember(q, j[0] ? pt(j[0].lat, j[0].lon) : null) : null; }
   catch { return null; }
 });
-// Photon guesses freely, so only an answer in the right town counts
+// Photon guesses freely, so only an answer in the right town counts (or, without a town, a place of exactly that name)
 const photon = async (q, city) => {
   const key = 'photon:' + q; if (key in geo) return geo[key];
   try {
     const j = await (await fetch('https://photon.komoot.io/api/?limit=3&lang=default&bbox=34.2,29.4,35.9,33.4&q=' + encodeURIComponent(q), { headers: UA_GEO })).json();
-    const town = city.split(/[\s-]/)[0];
-    const f = j.features.find(f => ['house', 'street'].includes(f.properties.type) && [f.properties.city, f.properties.locality, f.properties.district, f.properties.county].some(x => x && x.includes(town)));
+    const town = city && city.split(/[\s-]/)[0];
+    const f = j.features.find(f => town ? ['house', 'street'].includes(f.properties.type) && [f.properties.city, f.properties.locality, f.properties.district, f.properties.county].some(x => x && x.includes(town)) : f.properties.name === q);
     return remember(key, f ? pt(f.geometry.coordinates[1], f.geometry.coordinates[0]) : null);
   } catch { return null; }
 };
@@ -86,6 +87,15 @@ function cleanAddress(a, city) {
   a = a.replace(/^(\d+[א-ת]?)\s+(.+)$/, '$2 $1').replace(/\s+/g, ' ').trim();
   return /[א-תa-z]{2}/i.test(a) ? a : '';
 }
+// No town at all: a junction, interchange or industrial zone with a name is a place of its own ("צומת ביל"ו", "מחלף לטרון").
+// Malls and plain streets are not, since the same names are found in other towns
+function spot(s) {
+  for (const t of [s.address, s.name]) {
+    const m = t.replace(/&#x?[0-9a-f]+;/gi, ' ').replace(/א\.ת\.?|אזור ה?תעשי[י]?ה/g, 'אזור תעשייה').match(/(צומת|מחלף|אזור תעשייה)\s+([^,\d]+)/);
+    const name = m?.[2].split(/\s+(?:ליד|בין|מול|כביש|ל(?=צומת|מחלף))/)[0].trim();
+    if (name && name.length > 2) return `${m[1]} ${name}`;
+  }
+}
 async function locate(s, city) {
   const town = isTown(city) ? townName(city) : '';
   const addr = cleanAddress(s.address, town);
@@ -96,7 +106,8 @@ async function locate(s, city) {
     const q = street !== addr && street.length > 2 && (await nominatim(`${street}, ${town}`) || await photon(`${street} ${town}`, town));
     if (q) return { lat: q[0], lng: q[1], approx: 'street' };
   }
-  const c = town && await nominatim(town);
+  if (!town) { const q = spot(s), p = q && (await nominatim(q) || await photon(q)); return p ? { lat: p[0], lng: p[1], approx: 'place' } : {}; }
+  const c = await nominatim(town);
   return c ? { lat: c[0], lng: c[1], approx: 'town' } : {};
 }
 
