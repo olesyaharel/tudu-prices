@@ -17,7 +17,7 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 const arg = k => process.argv.find(a => a.startsWith(`--${k}=`))?.split('=')[1];
 const flag = k => process.argv.includes(`--${k}`);
 const OUT = path.resolve(arg('out') || HERE + 'out') + '/', MERGE = arg('merge') && path.resolve(arg('merge')) + '/';
-const GEO = HERE + 'geocode.json', CITIES = HERE + 'cities.json';
+const GEO = HERE + 'geocode.json', CITIES = HERE + 'cities.json', PLACES = HERE + 'places.json';
 const LIMIT = +arg('limit') || Infinity, PARALLEL = 6, MAX_MERGE_AGE_H = 36;
 for (const d of ['', 'prices', 'items']) fs.mkdirSync(OUT + d, { recursive: true });
 const started = Date.now(), log = (...a) => console.log(`[${((Date.now() - started) / 1000).toFixed(0)}s]`, ...a);
@@ -39,10 +39,13 @@ const ALIASES = { 'ת"א': 'תל אביב - יפו', 'יד אליהו': 'תל א
   'דלית אל כרמל': 'דאלית אל-כרמל', 'מישור אדומים': 'מעלה אדומים', 'ויתקין': 'כפר ויתקין' };
 const WORDS = new Set(['אזור', 'רחוב', 'מרכז', 'שדרות', 'נווה', 'רמות']);
 const isTown = c => c && !/^\d+$/.test(c);
+// places.json: where a branch is, told by hand (branch key → town or place), for branches the files and guesses can't place
+const places = fs.existsSync(PLACES) ? JSON.parse(fs.readFileSync(PLACES)) : {};
 function fillCities(list, cities) {
   const parts = names => names.flatMap(n => [n, ...n.split(/\s*-\s*/)].filter(p => p.length > 2).map(p => [p, n])).sort((a, b) => b[0].length - a[0].length);
   const near = parts([...new Set(list.map(b => b.city).filter(isTown))]).concat(Object.entries(ALIASES));
   const all = new Set(Object.values(cities)), any = parts([...all]).filter(([p]) => p.length > 3 && !WORDS.has(p));
+  for (const b of list) if (places[b.k]) b.city = places[b.k];
   for (const b of list) if (!isTown(b.city)) {
     const name = ` ${b.name} `.replace(/[-,()]/g, ' ').replace(/\s+/g, ' '), found = t => t.find(([p]) => name.includes(` ${p} `))?.[1];
     b.city = found(near) || [b.name.trim(), b.address.trim()].find(t => all.has(t)) || found(any) || '';
