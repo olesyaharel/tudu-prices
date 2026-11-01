@@ -8,6 +8,7 @@ permissions:
   contents: write           # to save new branch locations (geocode.json)
   pages: write
   id-token: write
+  issues: write             # one issue listing branches without a location (notify.mjs)
 concurrency: { group: prices, cancel-in-progress: false }
 jobs:
   prices:
@@ -22,6 +23,9 @@ jobs:
         run: mkdir israel && (gh release download israel -p local.tgz -D israel && tar xzf israel/local.tgz -C israel || echo "no run from Israel")
         env: { GH_TOKEN: '${{ github.token }}' }
       - run: node job.mjs --merge=israel
+      - name: Branches without a location (an email only when the list changes)
+        run: node notify.mjs
+        env: { GH_TOKEN: '${{ github.token }}' }
       - name: Save new locations
         run: |
           git config user.name "tudu-prices bot"
