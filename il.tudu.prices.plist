@@ -6,12 +6,12 @@
 <dict>
   <key>Label</key><string>il.tudu.prices</string>
   <key>ProgramArguments</key>
-  <array><string>/bin/zsh</string><string>/Users/olesya/Documents/Cloude-projects/tudu-prices/local.sh</string></array>
+  <array><string>/bin/zsh</string><string>/Users/olesya/tudu-prices/local.sh</string></array>
   <key>EnvironmentVariables</key>
   <dict><key>PATH</key><string>/usr/local/bin:/usr/bin:/bin</string></dict>
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>5</integer><key>Minute</key><integer>45</integer></dict>
-  <key>StandardOutPath</key><string>/Users/olesya/Documents/Cloude-projects/tudu-prices/local.log</string>
-  <key>StandardErrorPath</key><string>/Users/olesya/Documents/Cloude-projects/tudu-prices/local.log</string>
+  <key>StandardOutPath</key><string>/Users/olesya/tudu-prices/local.log</string>
+  <key>StandardErrorPath</key><string>/Users/olesya/tudu-prices/local.log</string>
 </dict>
 </plist>
