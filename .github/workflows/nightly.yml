@@ -1,0 +1,32 @@
+# Every night: download the chains' public price files and publish the result on GitHub Pages
+name: nightly prices
+on:
+  schedule:
+    - cron: '30 3 * * *'   # 03:30 UTC = 05:30/06:30 in Israel, after the chains publish their full files
+  workflow_dispatch:        # "Run workflow" button, for a run by hand
+permissions:
+  contents: write           # to save new branch locations (geocode.json)
+  pages: write
+  id-token: write
+concurrency: { group: prices, cancel-in-progress: false }
+jobs:
+  prices:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: { name: github-pages, url: '${{ steps.deploy.outputs.page_url }}' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: node job.mjs
+      - name: Save new locations
+        run: |
+          git config user.name "tudu-prices bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add geocode.json cities.json
+          git diff --cached --quiet || (git commit -m "New branch locations" && git push)
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: out }
+      - id: deploy
+        uses: actions/deploy-pages@v4
