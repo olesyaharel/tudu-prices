@@ -13,5 +13,8 @@ Carrefour, Hatzi Hinam, Victory, Mahsanei HaShuk, H. Cohen and Netiv HaHesed ref
 `il.tudu.prices.plist`) and leaves them on the release "israel"; the nightly job folds them in with `--merge`.
 Branch locations come from OpenStreetMap (Nominatim, Photon) and are kept in `geocode.json`.
 
+## Sales
+Each branch's sales file (PromoFull) gives `out/promos/<branch>.json`: only sales anyone can get at the till today (no club, credit-card, coupon or gift sales, none that need a basket total), as the price per item and how many to buy ("3 ב-10" is 3.33 each when buying 3). The matcher uses a sale price when it is lower and keeps the regular price beside it.
+
 ## Grocery-list products
 `defs.json` says, for each product on the app's list ("חלב 3%", "עגבניות"), which items match it and how its price is compared (per kilo, liter, unit or pack); `match.mjs` is the matcher. General products ("לחם", "שמפו") aren't priced: they list the specific products the user picks from. After the nightly job, `node matchall.mjs` writes `out/match/<branch>.json` (each product's price there and the item picked) and `out/products.json`.

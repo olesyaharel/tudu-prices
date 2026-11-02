@@ -1,6 +1,7 @@
 // Price-transparency files from the chains' official sites. Own code; which portals exist was learned from public projects.
 // Each source gives: stores() → [{id, name, address, city, sub}], files() → Map(storeId → url-or-name of its latest PriceFull),
-// and prices(storeId, ref) → [{code, name, maker, price, qty, unit, weighted}]
+// and prices(storeId, ref) → [{code, name, maker, price, qty, unit, weighted}]; promoFiles() and promos(storeId, ref) do the
+// same for the sales file (PromoFull) → the sales open to everyone today (see promoRows)
 import { gunzipSync } from 'node:zlib';
 
 const UA = { 'User-Agent': 'TuDu-prices/1.0 (grocery list app, daily price comparison)' };
@@ -30,7 +31,37 @@ const itemRows = xml => records(xml, 'Item').concat(records(xml, 'Product')).map
   weighted: d.bisweighted === '1' || d.bisweighted === 'true'
 })).filter(i => i.code && i.price > 0);
 // latest file per store, from names like PriceFull7290027600007-001-105-20261101-0300.gz (City Market leaves out the sub-chain)
-const latestByStore = names => { const m = new Map(); for (const n of names) { const p = n.match(/PriceFull\d+-(?:\d+-)?0*(\d+)-(\d{8,12})/i); if (p && (!m.get(p[1]) || m.get(p[1]).t < p[2] + n)) m.set(p[1], { t: p[2] + n, ref: n }); } return new Map([...m].map(([k, v]) => [k, v.ref])); };
+const latestByStore = (names, kind = 'PriceFull') => { const m = new Map(), re = new RegExp(`${kind}\\d+-(?:\\d+-)?0*(\\d+)-(\\d{8,12})`, 'i'); for (const n of names) { const p = n.match(re); if (p && (!m.get(p[1]) || m.get(p[1]).t < p[2] + n)) m.set(p[1], { t: p[2] + n, ref: n }); } return new Map([...m].map(([k, v]) => [k, v.ref])); };
+
+// Sales (PromoFull): only what anyone can get at the till today — not club or credit-card sales, coupons, gifts, or sales
+// that need a basket total; a sale on hundreds of items at once is a store-wide coupon, not a price. Each gives the item
+// codes and what it asks: MinQty items for DiscountedPrice ("3 ב-10"), or DiscountRate % off
+const tag = (b, t) => (b.match(new RegExp(`<${t}>([^<]*)</${t}>`, 'i')) || [])[1]?.trim() || '';
+export function promoRows(xml, now = new Date()) {
+  const today = now.toISOString().slice(0, 10), out = [];
+  for (const [, b] of xml.matchAll(/<Promotion>([\s\S]*?)<\/Promotion>/gi)) {
+    const start = (tag(b, 'PromotionStartDateTime') || tag(b, 'PromotionStartDate')).slice(0, 10), end = (tag(b, 'PromotionEndDateTime') || tag(b, 'PromotionEndDate')).slice(0, 10);
+    if ((start && start > today) || (end && end < today)) continue;
+    const clubs = [...b.matchAll(/<Club(?:ID|Id)>([^<]*)</gi)].map(m => m[1].trim());
+    if (clubs.length && !clubs.some(c => /^0(\D|$)/.test(c))) continue;
+    if (tag(b, 'AdditionalIsCoupon') === '1' || tag(b, 'IsGiftItem') === '1' || +tag(b, 'AdditionalGiftCount') > 0 || +tag(b, 'MinPurchaseAmount') > 0) continue;
+    const codes = [...b.matchAll(/<ItemCode>([^<]+)</gi)].map(m => m[1].trim()); if (!codes.length || codes.length > 300) continue;
+    out.push({ codes, minQty: +tag(b, 'MinQty') || 1, price: +tag(b, 'DiscountedPrice') || 0, rate: +tag(b, 'DiscountRate') || 0, desc: ent(tag(b, 'PromotionDescription')) });
+  }
+  return out;
+}
+
+// A sale's price per item, next to the item's regular price, or null when the sale can't be read safely: "3 ב-10" (or
+// MinQty 3 with DiscountedPrice 10) is 3.33; MinQty 1 is the price itself; a rate is % off. Chains differ on whether
+// DiscountedPrice is per item or for all MinQty, so a reading that lands outside 20–99.5% of the regular price is dropped
+export function salePrice(p, regular) {
+  const ok = v => v > 0 && v >= regular * 0.2 && v < regular * 0.995 ? +v.toFixed(2) : null;
+  const xy = p.desc.match(/(\d+)\s*ב\s*-?\s*(\d+(?:\.\d+)?)\s*(?:ש"ח|₪)?/);
+  if (xy && +xy[1] >= 2 && +xy[1] <= 12) return ok(+xy[2] / +xy[1]) && { unit: ok(+xy[2] / +xy[1]), qty: +xy[1] };
+  if (p.price > 0) { const q = Math.max(1, Math.round(p.minQty)); for (const v of q > 1 ? [p.price / q, p.price] : [p.price]) if (ok(v)) return { unit: ok(v), qty: q }; return null; }
+  if (p.rate > 0 && p.rate < 100 && p.minQty <= 1) return ok(regular * (1 - p.rate / 100)) && { unit: ok(regular * (1 - p.rate / 100)), qty: 1 };
+  return null;
+}
 
 // Shufersal
 const SHUF = 'https://prices.shufersal.co.il/FileObject/UpdateCategory';
@@ -40,7 +71,9 @@ const shufersal = {
   stores: async () => records(unzip(await bytes((await shufLinks(5))[0])), 'Store').map(storeRow),
   // Shufersal lists files per store, so the store's latest link is looked up when its prices are fetched
   files: async ids => new Map(ids.map(id => [id, null])),
-  prices: async id => { const u = (await shufLinks(2, id)).filter(u => /PriceFull/i.test(u)).pop(); if (!u) throw new Error('no PriceFull'); return itemRows(unzip(await bytes(u))); }
+  prices: async id => { const u = (await shufLinks(2, id)).filter(u => /PriceFull/i.test(u)).pop(); if (!u) throw new Error('no PriceFull'); return itemRows(unzip(await bytes(u))); },
+  promoFiles: async ids => new Map(ids.map(id => [id, null])),
+  promos: async id => { const u = (await shufLinks(4, id)).filter(u => /PromoFull/i.test(u)).pop(); return u ? promoRows(unzip(await bytes(u))) : []; }
 };
 
 // publishedprices.co.il: each chain has a public user with an empty password
@@ -64,7 +97,9 @@ const published = (user, name) => {
     name,
     stores: async () => { const x = await session(); const f = (await x.ls('Stores')).sort().pop(); if (!f) throw new Error('no Stores file'); return records(await x.dl(f), 'Store').map(storeRow); },
     files: async () => latestByStore(await (await session()).ls('PriceFull')),
-    prices: async (id, ref) => itemRows(await (await session()).dl(ref))
+    prices: async (id, ref) => itemRows(await (await session()).dl(ref)),
+    promoFiles: async () => latestByStore(await (await session()).ls('PromoFull'), 'PromoFull'),
+    promos: async (id, ref) => promoRows(await (await session()).dl(ref))
   };
 };
 
@@ -76,18 +111,23 @@ const carrefour = {
   name: 'קרפור',
   stores: async () => { const { path, names } = await carIndex(); const n = names.filter(n => /^Stores/i.test(n)).sort().pop(); return records(unzip(await bytes(`${CAR}/${path}/${n}`)), 'Store').map(storeRow); },
   files: async () => latestByStore((await carIndex()).names),
-  prices: async (id, ref) => itemRows(unzip(await bytes(`${CAR}/${(await carIndex()).path}/${ref}`)))
+  prices: async (id, ref) => itemRows(unzip(await bytes(`${CAR}/${(await carIndex()).path}/${ref}`))),
+  promoFiles: async () => latestByStore((await carIndex()).names, 'PromoFull'),
+  promos: async (id, ref) => promoRows(unzip(await bytes(`${CAR}/${(await carIndex()).path}/${ref}`)))
 };
 
 // Hatzi Hinam: its own site lists blob links, newest first, a few per page
 const HH = 'https://shop.hazi-hinam.co.il/Prices';
 const hhLinks = async (f, pages) => { const out = []; for (let p = 1; p <= pages; p++) { const l = [...(await (await get(`${HH}?p=${p}&f=${f}`)).text()).matchAll(/https:\/\/hazihinam[^"']+\.gz/g)].map(m => m[0]); if (!l.length) break; out.push(...l); } return out; };
+let hhList; const hhAll = () => hhList || (hhList = hhLinks(1, 40)); // one listing (all file types) for prices and sales
 const hazihinam = {
   name: 'חצי חינם',
   stores: async () => { const u = (await hhLinks(3, 10)).filter(u => /Stores/i.test(u)).sort().pop(); if (!u) throw new Error('no Stores file');
     return records(unzip(await bytes(u)), 'Store').map(storeRow).map(s => ({ ...s, name: s.name || 'חצי חינם', address: s.address.replace(/,\s*ישראל\s*$/, '').replace(/,\s*[^,]+$/, '') })); },
-  files: async () => new Map([...latestByStore((await hhLinks(1, 40)).map(u => u))]),
-  prices: async (id, ref) => itemRows(unzip(await bytes(ref)))
+  files: async () => latestByStore(await hhAll()),
+  prices: async (id, ref) => itemRows(unzip(await bytes(ref))),
+  promoFiles: async () => latestByStore(await hhAll(), 'PromoFull'),
+  promos: async (id, ref) => promoRows(unzip(await bytes(ref)))
 };
 
 // laibcatalog.co.il: a file service some chains use (Victory), with its file list as JSON
@@ -99,11 +139,13 @@ const laib = (edi, name) => {
     name,
     stores: async () => { const f = (await all()).filter(f => f.fileType === 'stores').map(f => f.fileName).sort().pop(); if (!f) throw new Error('no Stores file'); return records(unzip(await bytes(url(f))), 'Store').map(storeRow); },
     files: async () => latestByStore((await all()).filter(f => f.fileType === 'pricefull').map(f => f.fileName)),
-    prices: async (id, ref) => itemRows(unzip(await bytes(url(ref))))
+    prices: async (id, ref) => itemRows(unzip(await bytes(url(ref)))),
+    promoFiles: async () => latestByStore((await all()).filter(f => f.fileType === 'promofull').map(f => f.fileName), 'PromoFull'),
+    promos: async (id, ref) => promoRows(unzip(await bytes(url(ref))))
   };
 };
 
-// binaprojects.com: a site per chain, used by smaller chains; files listed by type (1 stores, 4 full prices), and each
+// binaprojects.com: a site per chain, used by smaller chains; files listed by type (1 stores, 4 full prices, 5 full sales), and each
 // download link asked for separately
 const bina = (host, name) => {
   const B = `https://${host}.binaprojects.com`, post = { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' } };
@@ -113,7 +155,9 @@ const bina = (host, name) => {
     name,
     stores: async () => { const f = (await list(1)).sort().pop(); if (!f) throw new Error('no Stores file'); return records(await file(f), 'Store').map(storeRow); },
     files: async () => latestByStore(await list(4)),
-    prices: async (id, ref) => itemRows(await file(ref))
+    prices: async (id, ref) => itemRows(await file(ref)),
+    promoFiles: async () => latestByStore(await list(5), 'PromoFull'),
+    promos: async (id, ref) => promoRows(await file(ref))
   };
 };
 
@@ -128,7 +172,7 @@ const cmList = async type => {
   const out = new Map();
   for (let d = 0; d < 3; d++) for (let p = 1; p <= 10; p++) {
     const rows = [...(await (await get(`${CM}/?t=${type}&f=1&d=${day(d)}&p=${p}`)).text())
-      .matchAll(/<td>\s*((?:Price|Stores)[\w.-]+)\s*<\/td>\s*<td>[^<]*<\/td>\s*<td>[^<]*<\/td>\s*<td>\s*([\d.]+)\s*<\/td>\s*<td>\s*<a href="(\/downloadFile\/[^"]+)"/g)];
+      .matchAll(/<td>\s*((?:Price|Promo|Stores)[\w.-]+)\s*<\/td>\s*<td>[^<]*<\/td>\s*<td>[^<]*<\/td>\s*<td>\s*([\d.]+)\s*<\/td>\s*<td>\s*<a href="(\/downloadFile\/[^"]+)"/g)];
     const size = out.size; for (const [, n, kb, u] of rows) out.set(n, { url: CM + u, kb: +kb });
     if (out.size === size) break;
   }
@@ -140,7 +184,9 @@ const citymarketShops = {
     return records(unzip(await bytes(f[1].url)), 'SubChainStoreXMLObject').map(storeRow).map(s => { const i = s.name.lastIndexOf(',');
       return s.address !== 'unknown' || i < 0 ? s : { ...s, name: s.name.slice(0, i).replace(/בע"מ/g, '').trim(), address: s.name.slice(i + 1).trim(), city: '' }; }); },
   files: async () => { const l = new Map([...await cmList(1)].filter(([, f]) => f.kb >= 20)); return new Map([...latestByStore(l.keys())].map(([id, n]) => [id, l.get(n).url])); },
-  prices: async (id, url) => itemRows(unzip(await bytes(url)))
+  prices: async (id, url) => itemRows(unzip(await bytes(url))),
+  promoFiles: async () => { const l = await cmList(2); return new Map([...latestByStore(l.keys(), 'PromoFull')].map(([id, n]) => [id, l.get(n).url])); },
+  promos: async (id, url) => promoRows(unzip(await bytes(url)))
 };
 
 // Netiv HaHesed (with Bar-Kol, Shira Market, Express Mehadrin): its site lists one day's files of a type
@@ -151,7 +197,9 @@ const netivhesed = {
   name: 'נתיב החסד',
   stores: async () => { const f = (await nhList('Stores')).sort().pop(); if (!f) throw new Error('no Stores file'); return records(await nhFile(f), 'Store').map(storeRow); },
   files: async () => latestByStore(await nhList('PriceFull')),
-  prices: async (id, ref) => itemRows(await nhFile(ref))
+  prices: async (id, ref) => itemRows(await nhFile(ref)),
+  promoFiles: async () => latestByStore(await nhList('PromoFull'), 'PromoFull'),
+  promos: async (id, ref) => promoRows(await nhFile(ref))
 };
 
 export const SOURCES = {

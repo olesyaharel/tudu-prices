@@ -94,11 +94,14 @@ export function candidates(def, items) {
 }
 
 // the branch's price for a product: the cheapest item per unit, times the standard amount
-export function priceFor(def, items, prices, cands = candidates(def, items)) {
+// sales: the branch's {code: [price per item, how many to buy, the sale's words]} (job.mjs); a sale price counts like a
+// price, and the result keeps the sale ({regular, qty, desc}) so the app can say "במבצע, 3 ב-10"
+export function priceFor(def, items, prices, cands = candidates(def, items), sales = {}) {
   const found = [];
   for (const [code, a] of cands) {
-    const price = prices[code]; if (!(price >= 0.5)) continue; // ₪0.01 is a placeholder, not a price
-    found.push({ code, name: items[code][0], price, per: price / a, count: a });
+    const regular = prices[code]; if (!(regular >= 0.5)) continue; // ₪0.01 is a placeholder, not a price
+    const s = sales[code], price = s ? s[0] : regular;
+    found.push({ code, name: items[code][0], price, per: price / a, count: a, ...(s && { sale: { regular, qty: s[1], desc: s[2] } }) });
   }
   if (!found.length) return null;
   // a price per unit far below the others is a data slip (a wrong size), not a bargain

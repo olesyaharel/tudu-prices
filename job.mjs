@@ -1,6 +1,7 @@
 // The nightly price job: every branch of every chain we can read → out/
 //   out/branches.json          [{k, chain, chainName, name, sub, address, city, lat, lng, approx?, n}]   approx: street | town | place
 //   out/prices/<k>.json        {code: price}               (one file per branch, small)
+//   out/promos/<k>.json        {code: [sale price per item, how many to buy, the sale's words]}   sales open to everyone today
 //   out/items/<chain>.json     {code: [name, qty, unit, weighted, maker]}
 //   out/report.json            what worked, what failed, how long it took
 // Run: node job.mjs [--chains=RamiLevi,carrefour] [--limit=5] [--out=dir] [--merge=dir] [--no-locate] [--locate-only]
@@ -11,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SOURCES } from './sources.mjs';
+import { SOURCES, salePrice } from './sources.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const arg = k => process.argv.find(a => a.startsWith(`--${k}=`))?.split('=')[1];
@@ -19,7 +20,7 @@ const flag = k => process.argv.includes(`--${k}`);
 const OUT = path.resolve(arg('out') || HERE + 'out') + '/', MERGE = arg('merge') && path.resolve(arg('merge')) + '/';
 const GEO = HERE + 'geocode.json', CITIES = HERE + 'cities.json', PLACES = HERE + 'places.json';
 const LIMIT = +arg('limit') || Infinity, PARALLEL = 6, MAX_MERGE_AGE_H = 36;
-for (const d of ['', 'prices', 'items']) fs.mkdirSync(OUT + d, { recursive: true });
+for (const d of ['', 'prices', 'promos', 'items']) fs.mkdirSync(OUT + d, { recursive: true });
 const started = Date.now(), log = (...a) => console.log(`[${((Date.now() - started) / 1000).toFixed(0)}s]`, ...a);
 
 // Some chains give the city as its official settlement code (2640 = ראש העין); the list comes from data.gov.il
@@ -161,7 +162,7 @@ if (MERGE && fs.existsSync(MERGE + 'report.json')) {
   const r = JSON.parse(fs.readFileSync(MERGE + 'report.json')), age = (Date.now() - Date.parse(r.started)) / 3600000;
   if (age > MAX_MERGE_AGE_H) log(`merge: the run from Israel is ${age.toFixed(0)} hours old, not used`);
   else {
-    for (const d of ['prices', 'items']) fs.cpSync(MERGE + d, OUT + d, { recursive: true });
+    for (const d of ['prices', 'promos', 'items']) if (fs.existsSync(MERGE + d)) fs.cpSync(MERGE + d, OUT + d, { recursive: true });
     branches.push(...JSON.parse(fs.readFileSync(MERGE + 'branches.json')).map(({ lat, lng, approx, ...b }) => b));
     for (const [c, rep] of Object.entries(r.chains)) { merged.add(c); report.chains[c] = { ...rep, from: 'israel', at: r.started }; }
     log('merge:', [...merged].join(', '), `(${age.toFixed(1)} hours old)`);
@@ -175,6 +176,7 @@ else for (const chain of (arg('chains') ? arg('chains').split(',') : Object.keys
     const stores = (await src.stores()).filter(s => !SKIP.test(s.name + ' ' + s.address + ' ' + s.sub));
     const files = await src.files(stores.map(s => s.id));
     const todo = stores.filter(s => files.has(s.id)).slice(0, LIMIT);
+    const promoFiles = await src.promoFiles(todo.map(s => s.id)).catch(e => { rep.promoError = e.message; return new Map(); });
     rep.stores = stores.length; rep.noFile = stores.length - stores.filter(s => files.has(s.id)).length;
     log(chain, stores.length, 'stores,', todo.length, 'with price files');
     const items = {};
@@ -185,6 +187,14 @@ else for (const chain of (arg('chains') ? arg('chains').split(',') : Object.keys
         const prices = {};
         for (const i of list) { prices[i.code] = i.price; items[i.code] ||= [i.name, i.qty, i.unit, i.weighted ? 1 : 0, i.maker]; }
         fs.writeFileSync(`${OUT}prices/${k}.json`, JSON.stringify(prices));
+        // sales open to everyone today: {code: [price per item, how many to buy, the sale's words]}, the lowest per item
+        if (promoFiles.has(s.id)) try {
+          const sale = {};
+          for (const p of await src.promos(s.id, promoFiles.get(s.id))) for (const c of p.codes) {
+            const v = prices[c] && salePrice(p, prices[c]); if (v && !(sale[c]?.[0] <= v.unit)) sale[c] = [v.unit, v.qty, p.desc];
+          }
+          fs.writeFileSync(`${OUT}promos/${k}.json`, JSON.stringify(sale)); rep.promos = (rep.promos || 0) + 1;
+        } catch (e) { rep.promoFailed = (rep.promoFailed || 0) + 1; }
         branches.push({ k, chain, chainName: src.name, name: s.name, sub: s.sub, address: s.address, city: cities[s.city] || s.city, n: list.length });
         rep.prices++;
       } catch (e) { rep.failed.push(`${s.id} ${s.name}: ${e.message}`); }
