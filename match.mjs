@@ -6,6 +6,8 @@
 //        sold), or packs (a 4-pack of wipes is 4: compared per pack, and `count` tells what the branch sells)
 //   std  the amount counted when the list gives none (1 kg tomatoes, 1 L milk, 12 eggs)
 //   bare (with by 'unit') a lone number ending the name is the count (floor wipes: "מטליות לחות לרצפה 10")
+//   size [min, max] of the item's amount in `by` (water: a 1.5 L bottle is [1.4, 1.6], a six-pack of them [8.5, 9.5]);
+//        single: only items sold one at a time; multi: only multipacks
 //   skip a reason this product isn't compared at all
 //   ask  a general product ("קפה", "עוגה", the brand "סנו"): not priced until the user picks what they meant, from
 //        options (more specific products defined here) and, with search, catalog products whose name matches it
@@ -34,11 +36,12 @@ const sizeInName = (name, by) => {
 
 // how many packs an item is sold as (wipes are bought by the pack): "4*56" and "56*4" are 4 packs (the small number),
 // רביעייה 4, שלישייה 3, זוג/שנייה 2, חמישייה 5, שישייה 6, "מארז … 5 יח" 5; a units field of 2–6 (Rami Levi's "3 יחידות") too
-const PACK_WORDS = [[/רב(י)?עי/, 4], [/שליש/, 3], [/זוג|שני(י)?ה|שניית/, 2], [/חמיש/, 5], [/שישי(י)?ה|שישיית/, 6]];
+const PACK_WORDS = [[/רב(י)?עי/, 4], [/שליש/, 3], [/זוג|שני(י)?ה|שניית/, 2], [/חמיש/, 5], [/שישי(י)?ה|שישיית/, 6], [/תריסר/, 12]];
 export function packs(item) {
   const [name, qty, unit] = item, n = clean(name);
-  const t = n.match(/(\d+)\s*[x*X×]\s*(\d+)?/);
-  if (t) { const a = +t[1], b = t[2] ? +t[2] : 0, p = b ? Math.min(a, b) : a; if (p >= 1 && p <= 12) return p; }
+  // "6*1.5 ליטר" is 6 bottles of 1.5: a size after the star leaves the first number as the count
+  const t = n.match(/(\d+)\s*[x*X×]\s*(\d+(?:[.,]\d+)?)?\s*(ליטר|ל|מ"ל|מל|גרם|גר|ג|ק"ג)?(?![א-ת])/);
+  if (t) { const a = +t[1], b = t[2] ? num(t[2]) : 0, p = !b ? a : t[3] || !Number.isInteger(b) ? a : Math.min(a, b); if (p >= 1 && p <= 24) return p; }
   for (const [re, p] of PACK_WORDS) if (re.test(n)) return p;
   const m = /מארז/.test(n) && n.match(/(\d+)\s*(?:יח|י)(?![א-ת])/); if (m && +m[1] >= 2 && +m[1] <= 12) return +m[1];
   return unit === 'יחידות' && qty >= 2 && qty <= 6 ? qty : 1; // "10 יחידות" is more likely 10 wipes
@@ -80,7 +83,13 @@ export const matches = (def, name) => { const { q, x } = compile(def), n = clean
 export function candidates(def, items) {
   if (def.skip || def.ask) return [];
   const out = [];
-  for (const [code, it] of Object.entries(items)) if (matches(def, it[0])) { const a = amount(it, def.by, def.std, def.bare); if (a) out.push([code, a]); }
+  for (const [code, it] of Object.entries(items)) if (matches(def, it[0])) {
+    const a = amount(it, def.by, def.std, def.bare); if (!a) continue;
+    if (def.size && (a < def.size[0] || a > def.size[1])) continue; // a package size (water: single 1.5 L vs a six-pack)
+    if (def.single && packs(it) > 1) continue;
+    if (def.multi && packs(it) < 2) continue;
+    out.push([code, a]);
+  }
   return out;
 }
 
