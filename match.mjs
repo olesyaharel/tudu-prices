@@ -2,7 +2,7 @@
 // A definition (defs.json, by product name): { q: [alternatives], x: [exclusions], by: 'kg'|'L'|'unit', std, skip? }
 //   q    regexes on the item name (quotes made plain, see clean); an item matches if any one does
 //   x    regexes; an item matching any of them is left out
-//   by   what the price is compared per: kilo, liter, or unit (a pack of 18 eggs is 18 units; a 32-roll pack is 32)
+//   by   what the price is compared per: kilo, liter, unit (a pack of 18 eggs is 18 units; a 32-roll pack is 32), or pack (as sold)
 //   std  the amount counted when the list gives none (1 kg tomatoes, 1 L milk, 12 eggs)
 //   skip a reason this product isn't compared (a whole category, like "אוכל לחתולים")
 // The cheapest matching item per unit is the branch's price (any brand; the list may later pin one).
@@ -17,24 +17,41 @@ const SIZE = [
   [/(\d+(?:[.,]\d+)?)\s*(?:ליטר|ל'|ל)(?![א-ת])/, 'L', 1], [/(\d+(?:[.,]\d+)?)\s*(?:מ"ל|מל|מ'ל)(?![א-ת])/, 'L', .001]
 ];
 const UNIT = { 'גרם': ['kg', .001], 'קילוגרם': ['kg', 1], 'קילוגרמים': ['kg', 1], 'מיליליטר': ['L', .001], 'ליטר': ['L', 1], 'ליטרים': ['L', 1] };
-// how many units a pack holds: "18 יח", "12 יחידות", "32 גליל", "x6"; else the item's own count when its unit is units
-const COUNT = /(\d+)\s*(?:יח(?:ידות|'|י)?|גלילים|גליל|גל'|זוגות|שקיות|ביצים)(?![א-ת])|(?:^|\s)(\d+)\s*(?:L|M|XL|S)?\s*(?:ביצים)|(?:x|X|\*)\s*(\d+)(?!\d)/;
+// how many units a pack holds: "18 יח", "12 יחידות", "32 גליל", "30 שקיקים", "x6"
+const COUNT = /(\d+)\s*(?:יח(?:ידות|ידו|'|י)?|גלילים|גליל|גל'|זוגות|שקיות|שקיקים|טבליות|טב'|ביצים|כמוסות|קפסולות)(?![א-ת])|(?:^|\s)(\d+)\s*(?:L|M|XL|S)?\s*(?:ביצים)/;
+// "A*B": a count of packs of a size ("10*100ג" is 10), a count of counts ("4*56" wipes is 224), or a measure ("28*26 ס"מ", none)
+const TIMES = /(\d+(?:[.,]\d+)?)\s*[x*X×]\s*(\d+(?:[.,]\d+)?)\s*(ק"ג|קג|גרם|גר|ג|מ"ל|מל|ליטר|ל|ס"מ|סמ|ס'מ|מ'|מטר)?(?![א-ת\d])/;
+const sizeInName = (name, by) => {
+  const t = clean(name).match(TIMES);
+  if (t && t[3] && !/ס|מ'|מטר/.test(t[3])) { const per = sizeInName(t[2] + ' ' + t[3], by); if (per) return +t[1] * per; }
+  for (const [re, b, f] of SIZE) { const m = clean(name).match(re); if (m && b === by) { const v = num(m[1]) * f; return by === 'L' && f === 1 && v >= 50 ? v / 1000 : v; } }
+  return null; // ("500 ל" is 500 ml)
+};
 
-// amount of `by` in one item, or null when it can't be told
-export function amount(item, by) {
-  const [name, qty, unit, weighted] = item;
+// amount of `by` in one item, or null when it can't be told. by 'pack': the item as sold (a box of tissues, a pack of sponges)
+export function amount(item, by, std = 1) {
+  const [name, qty, unit, weighted] = item, n = clean(name);
+  if (by === 'pack') return weighted ? null : 1;
   if (by === 'kg' || by === 'L') {
     if (weighted) return by === 'kg' ? 1 : null; // weighted items are priced per kilo
-    const u = UNIT[unit]; if (u && u[0] === by && qty > 0) return qty * u[1];
-    for (const [re, b, f] of SIZE) { const m = clean(name).match(re); if (m && b === by) return num(m[1]) * f; }
-    // names cut at 20 letters lose the size ("חלב תנובה 3% שומן 2"); an unnamed unit then tells by its size: 2 is liters, 250 is ml
-    if (!UNIT[unit] && unit !== 'יחידות' && qty > 0) return qty <= 5 ? qty : qty >= 20 ? qty / 1000 : null;
+    const fromName = sizeInName(n, by), u = UNIT[unit];
+    if (u && u[0] === by && qty > 0) {
+      let v = qty * u[1];
+      if (by === 'L' && u[1] === 1 && v >= 50) v /= 1000; // "750 ליטר" wine is 750 ml
+      // a size field far from the size in the name is a typing slip ("2.8 גרם" for a 2.8 kg bag): the name wins
+      return fromName && (v / fromName > 20 || fromName / v > 20) ? fromName : v;
+    }
+    if (fromName) return fromName;
+    // names cut at 20 letters lose the size unit ("חלב תנובה 3% שומן 2"): when the name ends with the item's number, 2 is liters, 250 is ml
+    if (!u && unit !== 'יחידות' && qty > 0 && new RegExp(`(^|\\s)${qty}\\.?$`).test(n)) return qty <= 5 ? qty : qty >= 20 ? qty / 1000 : null;
     return null;
   }
   if (weighted) return null;
-  const m = clean(name).match(COUNT); if (m) return +(m[1] || m[2] || m[3]);
-  // without a count in the name only a "units" item can be counted (toilet paper in meters can't)
-  return unit === 'יחידות' && qty >= 1 && qty < 200 ? qty : null;
+  const m = n.match(COUNT); if (m) return +(m[1] || m[2]);
+  const t = n.match(TIMES); if (t && !t[3]) return +t[1] * +t[2];
+  if (t && t[3] && !/ס|מ'|מטר/.test(t[3])) return +t[1];
+  // a "1 unit" item can't tell how many a pack holds, so for products counted in many (eggs, rolls) it's left out
+  return unit === 'יחידות' && qty >= 1 && qty < 1000 && (qty > 1 || std <= 1) ? qty : null;
 }
 
 const compile = def => def.re || (def.re = { q: def.q.map(s => new RegExp(s)), x: (def.x || []).map(s => new RegExp(s)) });
@@ -43,13 +60,16 @@ export const matches = (def, name) => { const { q, x } = compile(def), n = clean
 // the branch's price for a product: the cheapest item per unit, times the standard amount
 export function priceFor(def, items, prices) {
   if (def.skip) return null;
-  let best = null;
+  const found = [];
   for (const [code, price] of Object.entries(prices)) {
-    const it = items[code]; if (!it || !matches(def, it[0])) continue;
-    const a = amount(it, def.by); if (!a) continue;
-    const per = price / a; if (!best || per < best.per) best = { code, name: it[0], price, per, total: +(per * def.std).toFixed(2) };
+    const it = items[code]; if (!it || price < 0.5 || !matches(def, it[0])) continue; // ₪0.01 is a placeholder, not a price
+    const a = amount(it, def.by, def.std); if (a) found.push({ code, name: it[0], price, per: price / a });
   }
-  return best;
+  if (!found.length) return null;
+  // a price per unit far below the others is a data slip (a wrong size), not a bargain
+  found.sort((a, b) => a.per - b.per);
+  const mid = found[found.length >> 1].per, best = found.find(f => found.length < 3 || f.per >= mid / 5);
+  return { ...best, total: +(best.per * def.std).toFixed(2) };
 }
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop())) {
