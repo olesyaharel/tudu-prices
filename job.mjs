@@ -4,7 +4,7 @@
 //   out/items/<chain>.json     {code: [name, qty, unit, weighted, maker]}
 //   out/report.json            what worked, what failed, how long it took
 // Run: node job.mjs [--chains=RamiLevi,carrefour] [--limit=5] [--out=dir] [--merge=dir] [--no-locate] [--locate-only]
-//   --merge=dir    fold in a run made elsewhere: Carrefour and Hatzi Hinam refuse servers abroad, so a computer in Israel
+//   --merge=dir    fold in a run made elsewhere: some chains (Carrefour, Victory…) refuse servers abroad, so a computer in Israel
 //                  fetches them (local.sh) and this job takes its chains as they are, without fetching them again
 //   --no-locate    leave missing cities and branch locations out (the computer in Israel leaves them to this job)
 //   --locate-only  only redo cities and locations in an existing branches.json

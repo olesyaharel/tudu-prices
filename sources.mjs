@@ -25,12 +25,12 @@ export function records(xml, tag) {
 const ent = s => (s || '').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ').trim();
 const storeRow = d => ({ id: String(+d.storeid || 0), name: ent(d.storename), address: ent(d.address), city: ent(d.city), sub: ent(d.subchainname) });
 const itemRows = xml => records(xml, 'Item').concat(records(xml, 'Product')).map(d => ({
-  code: d.itemcode, name: ent(d.itemname), maker: ent(d.manufacturername || d.manufacturename),
+  code: d.itemcode, name: ent(d.itemname || d.itemnm), maker: ent(d.manufacturername || d.manufacturename),
   price: +d.itemprice, qty: +d.quantity || null, unit: ent(d.unitqty || d.unitofmeasure),
   weighted: d.bisweighted === '1' || d.bisweighted === 'true'
 })).filter(i => i.code && i.price > 0);
-// latest file per store, from names like PriceFull7290027600007-001-105-20261101-0300.gz
-const latestByStore = names => { const m = new Map(); for (const n of names) { const p = n.match(/PriceFull\d+-\d+-0*(\d+)-(\d{8,12})/i); if (p && (!m.get(p[1]) || m.get(p[1]).t < p[2] + n)) m.set(p[1], { t: p[2] + n, ref: n }); } return new Map([...m].map(([k, v]) => [k, v.ref])); };
+// latest file per store, from names like PriceFull7290027600007-001-105-20261101-0300.gz (City Market leaves out the sub-chain)
+const latestByStore = names => { const m = new Map(); for (const n of names) { const p = n.match(/PriceFull\d+-(?:\d+-)?0*(\d+)-(\d{8,12})/i); if (p && (!m.get(p[1]) || m.get(p[1]).t < p[2] + n)) m.set(p[1], { t: p[2] + n, ref: n }); } return new Map([...m].map(([k, v]) => [k, v.ref])); };
 
 // Shufersal
 const SHUF = 'https://prices.shufersal.co.il/FileObject/UpdateCategory';
@@ -117,6 +117,43 @@ const bina = (host, name) => {
   };
 };
 
+// the files of one day are listed per day, so these look at today and the two days before (dates as YYYY-MM-DD)
+const day = back => new Date(Date.now() - back * 864e5).toISOString().slice(0, 10);
+
+// City Market: its own site lists files by type (1 prices, 3 stores; f=1 full), a page of rows per day, each with a
+// download id and size. Some branches post hourly "full" files of a few KB with no prices, so smaller ones are passed over.
+// Its stores file has no address: the branch name ends with ", street number town".
+const CM = 'https://www.citymarket-shops.co.il';
+const cmList = async type => {
+  const out = new Map();
+  for (let d = 0; d < 3; d++) for (let p = 1; p <= 10; p++) {
+    const rows = [...(await (await get(`${CM}/?t=${type}&f=1&d=${day(d)}&p=${p}`)).text())
+      .matchAll(/<td>\s*((?:Price|Stores)[\w.-]+)\s*<\/td>\s*<td>[^<]*<\/td>\s*<td>[^<]*<\/td>\s*<td>\s*([\d.]+)\s*<\/td>\s*<td>\s*<a href="(\/downloadFile\/[^"]+)"/g)];
+    const size = out.size; for (const [, n, kb, u] of rows) out.set(n, { url: CM + u, kb: +kb });
+    if (out.size === size) break;
+  }
+  return out;
+};
+const citymarketShops = {
+  name: 'סיטי מרקט',
+  stores: async () => { const f = [...(await cmList(3))].sort().pop(); if (!f) throw new Error('no Stores file');
+    return records(unzip(await bytes(f[1].url)), 'SubChainStoreXMLObject').map(storeRow).map(s => { const i = s.name.lastIndexOf(',');
+      return s.address !== 'unknown' || i < 0 ? s : { ...s, name: s.name.slice(0, i).replace(/בע"מ/g, '').trim(), address: s.name.slice(i + 1).trim(), city: '' }; }); },
+  files: async () => { const l = new Map([...await cmList(1)].filter(([, f]) => f.kb >= 20)); return new Map([...latestByStore(l.keys())].map(([id, n]) => [id, l.get(n).url])); },
+  prices: async (id, url) => itemRows(unzip(await bytes(url)))
+};
+
+// Netiv HaHesed (with Bar-Kol, Shira Market, Express Mehadrin): its site lists one day's files of a type
+const NH = 'https://app.netiv-hesed.com';
+const nhList = async type => { const out = []; for (let d = 0; d < 3; d++) out.push(...[...(await (await get(`${NH}/?FileType=${type}&Date=${day(d)}`)).text()).matchAll(/fileName=([^"&]+)/g)].map(m => decodeURIComponent(m[1]))); return out; };
+const nhFile = async f => unzip(await bytes(`${NH}/Prices/Download?fileName=${encodeURIComponent(f)}`));
+const netivhesed = {
+  name: 'נתיב החסד',
+  stores: async () => { const f = (await nhList('Stores')).sort().pop(); if (!f) throw new Error('no Stores file'); return records(await nhFile(f), 'Store').map(storeRow); },
+  files: async () => latestByStore(await nhList('PriceFull')),
+  prices: async (id, ref) => itemRows(await nhFile(ref))
+};
+
 export const SOURCES = {
   shufersal, carrefour, hazihinam,
   RamiLevi: published('RamiLevi', 'רמי לוי'), osherad: published('osherad', 'אושר עד'), yohananof: published('yohananof', 'יוחננוף'),
@@ -126,5 +163,6 @@ export const SOURCES = {
   victory: laib('7290696200003', 'ויקטורי'), mshuk: laib('7290661400001', 'מחסני השוק'), hcohen: laib('7290455000004', 'ח. כהן'),
   kingstore: bina('kingstore', 'קינג סטור'), maayan2000: bina('maayan2000', 'מעיין 2000'), zolvebegadol: bina('zolvebegadol', 'זול ובגדול'),
   supersapir: bina('supersapir', 'סופר ספיר'), citymarket: bina('citymarketkiryatgat', 'סיטי מרקט'), superbareket: bina('superbareket', 'סופר ברקת'),
-  ktshivuk: bina('ktshivuk', 'משנת יוסף'), shukhayir: bina('shuk-hayir', 'שוק העיר'), shefabirkathashem: bina('shefabirkathashem', 'שפע ברכת השם')
+  ktshivuk: bina('ktshivuk', 'משנת יוסף'), shukhayir: bina('shuk-hayir', 'שוק העיר'), shefabirkathashem: bina('shefabirkathashem', 'שפע ברכת השם'),
+  citymarketshops: citymarketShops, netivhesed
 };
