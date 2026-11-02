@@ -76,13 +76,20 @@ export function amount(item, by, std = 1, bare = false) {
 const compile = def => def.re || (def.re = { q: def.q.map(s => new RegExp(s)), x: (def.x || []).map(s => new RegExp(s)) });
 export const matches = (def, name) => { const { q, x } = compile(def), n = clean(name); return q.some(r => r.test(n)) && !x.some(r => r.test(n)); };
 
+// a chain's items that match a product, with the amount each holds (done once per chain: its branches share the items)
+export function candidates(def, items) {
+  if (def.skip || def.ask) return [];
+  const out = [];
+  for (const [code, it] of Object.entries(items)) if (matches(def, it[0])) { const a = amount(it, def.by, def.std, def.bare); if (a) out.push([code, a]); }
+  return out;
+}
+
 // the branch's price for a product: the cheapest item per unit, times the standard amount
-export function priceFor(def, items, prices) {
-  if (def.skip || def.ask) return null;
+export function priceFor(def, items, prices, cands = candidates(def, items)) {
   const found = [];
-  for (const [code, price] of Object.entries(prices)) {
-    const it = items[code]; if (!it || price < 0.5 || !matches(def, it[0])) continue; // ₪0.01 is a placeholder, not a price
-    const a = amount(it, def.by, def.std, def.bare); if (a) found.push({ code, name: it[0], price, per: price / a, count: a });
+  for (const [code, a] of cands) {
+    const price = prices[code]; if (!(price >= 0.5)) continue; // ₪0.01 is a placeholder, not a price
+    found.push({ code, name: items[code][0], price, per: price / a, count: a });
   }
   if (!found.length) return null;
   // a price per unit far below the others is a data slip (a wrong size), not a bargain
