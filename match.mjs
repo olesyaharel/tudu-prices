@@ -2,7 +2,8 @@
 // A definition (defs.json, by product name): { q: [alternatives], x: [exclusions], by: 'kg'|'L'|'unit', std, skip? }
 //   q    regexes on the item name (quotes made plain, see clean); an item matches if any one does
 //   x    regexes; an item matching any of them is left out
-//   by   what the price is compared per: kilo, liter, unit (a pack of 18 eggs is 18 units; a 32-roll pack is 32), or pack (as sold)
+//   by   what the price is compared per: kilo, liter, unit (a pack of 18 eggs is 18 units; a 32-roll pack is 32), pack (as
+//        sold), or packs (a 4-pack of wipes is 4: compared per pack, and `count` tells what the branch sells)
 //   std  the amount counted when the list gives none (1 kg tomatoes, 1 L milk, 12 eggs)
 //   skip a reason this product isn't compared at all
 //   ask  a general product ("קפה", "עוגה", the brand "סנו"): not priced until the user picks what they meant, from
@@ -30,10 +31,23 @@ const sizeInName = (name, by) => {
   return null; // ("500 ל" is 500 ml)
 };
 
+// how many packs an item is sold as (wipes are bought by the pack): "4*56" and "56*4" are 4 packs (the small number),
+// רביעייה 4, שלישייה 3, זוג/שנייה 2, חמישייה 5, שישייה 6, "מארז … 5 יח" 5; a units field of 2–6 (Rami Levi's "3 יחידות") too
+const PACK_WORDS = [[/רב(י)?עי/, 4], [/שליש/, 3], [/זוג|שני(י)?ה|שניית/, 2], [/חמיש/, 5], [/שישי(י)?ה|שישיית/, 6]];
+export function packs(item) {
+  const [name, qty, unit] = item, n = clean(name);
+  const t = n.match(/(\d+)\s*[x*X×]\s*(\d+)?/);
+  if (t) { const a = +t[1], b = t[2] ? +t[2] : 0, p = b ? Math.min(a, b) : a; if (p >= 1 && p <= 12) return p; }
+  for (const [re, p] of PACK_WORDS) if (re.test(n)) return p;
+  const m = /מארז/.test(n) && n.match(/(\d+)\s*(?:יח|י)(?![א-ת])/); if (m && +m[1] >= 2 && +m[1] <= 12) return +m[1];
+  return unit === 'יחידות' && qty >= 2 && qty <= 6 ? qty : 1; // "10 יחידות" is more likely 10 wipes
+}
+
 // amount of `by` in one item, or null when it can't be told. by 'pack': the item as sold (a box of tissues, a pack of sponges)
 export function amount(item, by, std = 1) {
   const [name, qty, unit, weighted] = item, n = clean(name);
   if (by === 'pack') return weighted ? null : 1;
+  if (by === 'packs') return weighted ? null : packs(item);
   if (by === 'kg' || by === 'L') {
     if (weighted) return by === 'kg' ? 1 : null; // weighted items are priced per kilo
     const fromName = sizeInName(n, by), u = UNIT[unit];
@@ -65,7 +79,7 @@ export function priceFor(def, items, prices) {
   const found = [];
   for (const [code, price] of Object.entries(prices)) {
     const it = items[code]; if (!it || price < 0.5 || !matches(def, it[0])) continue; // ₪0.01 is a placeholder, not a price
-    const a = amount(it, def.by, def.std); if (a) found.push({ code, name: it[0], price, per: price / a });
+    const a = amount(it, def.by, def.std); if (a) found.push({ code, name: it[0], price, per: price / a, count: a });
   }
   if (!found.length) return null;
   // a price per unit far below the others is a data slip (a wrong size), not a bargain
