@@ -5,6 +5,7 @@
 //   by   what the price is compared per: kilo, liter, unit (a pack of 18 eggs is 18 units; a 32-roll pack is 32), pack (as
 //        sold), or packs (a 4-pack of wipes is 4: compared per pack, and `count` tells what the branch sells)
 //   std  the amount counted when the list gives none (1 kg tomatoes, 1 L milk, 12 eggs)
+//   bare (with by 'unit') a lone number ending the name is the count (floor wipes: "מטליות לחות לרצפה 10")
 //   skip a reason this product isn't compared at all
 //   ask  a general product ("קפה", "עוגה", the brand "סנו"): not priced until the user picks what they meant, from
 //        options (more specific products defined here) and, with search, catalog products whose name matches it
@@ -44,7 +45,7 @@ export function packs(item) {
 }
 
 // amount of `by` in one item, or null when it can't be told. by 'pack': the item as sold (a box of tissues, a pack of sponges)
-export function amount(item, by, std = 1) {
+export function amount(item, by, std = 1, bare = false) {
   const [name, qty, unit, weighted] = item, n = clean(name);
   if (by === 'pack') return weighted ? null : 1;
   if (by === 'packs') return weighted ? null : packs(item);
@@ -65,9 +66,11 @@ export function amount(item, by, std = 1) {
   if (weighted) return null;
   const t = n.match(TIMES); if (t && !t[3]) return +t[1] * +t[2]; // "6*72י" wipes are 432
   const m = n.match(COUNT); if (m) return +(m[1] || m[2]);
+  // with `bare`, a lone number after the name is the count ("מטליות לחות לרצפה 10", "לרצפה50 VIVI")
+  const b = bare && n.match(/[א-ת]\s*(\d{1,3})(?:\s+[A-Za-z]+)?$/); if (b && +b[1] > 1) return +b[1];
   if (t && t[3] && !/ס|מ'|מטר/.test(t[3])) return +t[1];
   // a "units" field small next to the usual amount counts packs, not pieces ("4" for a 4-pack of wipes), so it can't be used
-  return unit === 'יחידות' && qty >= 1 && qty <= 5000 && (std <= 1 || qty >= std / 10) ? qty : null;
+  return unit === 'יחידות' && qty >= 1 && qty <= 5000 && (std <= 1 || qty > std / 10) ? qty : null;
 }
 
 const compile = def => def.re || (def.re = { q: def.q.map(s => new RegExp(s)), x: (def.x || []).map(s => new RegExp(s)) });
@@ -79,7 +82,7 @@ export function priceFor(def, items, prices) {
   const found = [];
   for (const [code, price] of Object.entries(prices)) {
     const it = items[code]; if (!it || price < 0.5 || !matches(def, it[0])) continue; // ₪0.01 is a placeholder, not a price
-    const a = amount(it, def.by, def.std); if (a) found.push({ code, name: it[0], price, per: price / a, count: a });
+    const a = amount(it, def.by, def.std, def.bare); if (a) found.push({ code, name: it[0], price, per: price / a, count: a });
   }
   if (!found.length) return null;
   // a price per unit far below the others is a data slip (a wrong size), not a bargain

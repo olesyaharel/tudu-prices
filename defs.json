@@ -20086,8 +20086,9 @@
    "מגבונים לרצפה"
   ],
   "x": [],
-  "by": "packs",
-  "std": 1
+  "by": "unit",
+  "std": 10,
+  "bare": true
  },
  "נייר טואלט לח": {
   "dept": "toiletries",
