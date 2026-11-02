@@ -9,6 +9,6 @@ Every night this downloads the public price files that Israeli supermarket chain
 - `report.json` — what worked last night and what didn't
 
 Run by hand: `node job.mjs` (Node 22). Options: `--chains=RamiLevi,carrefour`, `--limit=5`, `--out=dir`, `--merge=dir`, `--no-locate`, `--locate-only`.
-Carrefour, Hatzi Hinam, Victory, Mahsanei HaShuk and H. Cohen refuse servers abroad, so a computer in Israel fetches them each morning (`local.sh`, scheduled by
+Carrefour, Hatzi Hinam, Victory, Mahsanei HaShuk, H. Cohen and Netiv HaHesed refuse servers abroad, so a computer in Israel fetches them each morning (`local.sh`, scheduled by
 `il.tudu.prices.plist`) and leaves them on the release "israel"; the nightly job folds them in with `--merge`.
 Branch locations come from OpenStreetMap (Nominatim, Photon) and are kept in `geocode.json`.

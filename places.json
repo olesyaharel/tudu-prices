@@ -28,5 +28,30 @@
  "citymarket-11": {
   "city": "ראשון לציון",
   "address": "ירושלים 120"
+ },
+ "Keshet-4": {
+  "city": "חיפה",
+  "address": "שבתאי לוי 23"
+ },
+ "Keshet-17": "גבעת ברנר",
+ "supersapir-157": {
+  "city": "תל אביב - יפו",
+  "address": "שלונסקי 6"
+ },
+ "supersapir-158": {
+  "city": "תל אביב - יפו",
+  "address": "פיכמן 4"
+ },
+ "supersapir-502": {
+  "city": "תל אביב - יפו",
+  "address": "ג'ורג' וייז 20"
+ },
+ "supersapir-52": {
+  "city": "קרית יערים",
+  "address": "התאנה 1"
+ },
+ "citymarketshops-9": {
+  "city": "תל אביב - יפו",
+  "address": "לח\"י 36"
  }
 }

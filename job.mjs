@@ -36,9 +36,10 @@ async function cityNames() {
 // that isn't also a common word (אזור, רחוב). ALIASES: short forms and well-known places the chains write instead of the town
 const ALIASES = { 'ת"א': 'תל אביב - יפו', 'יד אליהו': 'תל אביב - יפו', 'ראשלצ': 'ראשון לציון', 'ראשל"צ': 'ראשון לציון', 'ב"ש': 'באר שבע',
   'פ"ת': 'פתח תקווה', 'כ"ס': 'כפר סבא', 'עקרון': 'קרית עקרון', 'פולג': 'נתניה', 'חוצות המפרץ': 'חיפה', 'צור יגאל': 'כוכב יאיר-צור יגאל',
-  'דלית אל כרמל': 'דאלית אל-כרמל', 'מישור אדומים': 'מעלה אדומים', 'ויתקין': 'כפר ויתקין', 'טירת הכרמל': 'טירת כרמל' };
+  'דלית אל כרמל': 'דאלית אל-כרמל', 'מישור אדומים': 'מעלה אדומים', 'ויתקין': 'כפר ויתקין', 'טירת הכרמל': 'טירת כרמל', 'תל אבית יפה': 'תל אביב - יפו',
+  'יוקנעם': 'יקנעם עילית', 'טבעון': 'קרית טבעון', 'קרית חיים': 'חיפה', 'קרית אליעזר': 'חיפה' };
 const WORDS = new Set(['אזור', 'רחוב', 'מרכז', 'שדרות', 'נווה', 'רמות']);
-const PREFIX = new Set(['כפר', 'קרית', 'נווה', 'נוה', 'גבעת', 'רמת', 'בית', 'תל', 'עין', 'מושב', 'קיבוץ', 'שכונת', 'רחוב', 'שדרות']);
+const PREFIX = new Set(['כפר', 'קרית', 'נווה', 'נוה', 'גבעת', 'רמת', 'בית', 'תל', 'עין', 'שכונת', 'רחוב', 'שדרות']);
 const isTown = c => c && !/^\d+$/.test(c);
 // places.json: where a branch is, told by hand, for branches the files and guesses can't place:
 // branch key → town or place ("מחלף לטרון"), or {city, address} when the file's address is missing or wrong
@@ -52,13 +53,22 @@ function fillCities(list, cities) {
   const near = parts([...new Set(list.map(b => b.city).filter(isTown))]).concat(Object.entries(ALIASES).map(([p, n]) => [words(p), n]));
   const all = new Set(Object.values(cities).map(c => words(c).join(' '))), any = parts(Object.values(cities)).filter(([w]) => w.join('').length > 2 && !(w.length === 1 && WORDS.has(w[0])));
   for (const b of list) if (places[b.k]) Object.assign(b, typeof places[b.k] === 'string' ? { city: places[b.k] } : places[b.k]);
-  for (const b of list) if (!isTown(b.city)) {
+  // a written town counts only if it's a real one (or a known short form); typos like "תל אבית יפה" are searched for below
+  const key = c => words(c).join(' '), known = new Map([...Object.values(cities).map(c => [key(c), c]), ...Object.entries(ALIASES).map(([p, n]) => [key(p), n])]);
+  for (const b of list) if (isTown(b.city) && known.has(key(b.city))) b.city = known.get(key(b.city));
+  for (const b of list) if (!isTown(b.city) || !known.has(key(b.city))) {
+    const written = isTown(b.city) ? b.city : '';
     // the town written first in the name wins ("ראשל"צ ירושלים 120" is a street in Rishon), then the longer one; a word
     // right after כפר, קרית… belongs to a longer name ("כפר עזר" isn't the moshav עזר)
-    const name = words(b.name), at = w => name.findIndex((_, i) => !PREFIX.has(name[i - 1]) && w.every((x, j) => name[i + j] === x));
-    const found = t => t.map(([w, n]) => [at(w), n]).filter(([i]) => i >= 0).sort((a, b) => a[0] - b[0])[0]?.[1];
-    const whole = [b.name, b.address].map(t => words(t).join(' ')).find(t => all.has(t));
-    b.city = found(near) || (whole && Object.values(cities).find(c => words(c).join(' ') === whole)) || found(any) || '';
+    const at = (text, w) => text.findIndex((_, i) => !PREFIX.has(text[i - 1]) && w.every((x, j) => text[i + j] === x));
+    const found = (text, t) => t.map(([w, n]) => [at(text, w), n]).filter(([i]) => i >= 0).sort((a, b) => a[0] - b[0])[0]?.[1];
+    const name = words(b.name), whole = [b.name, b.address].map(t => words(t).join(' ')).find(t => all.has(t));
+    // some chains write the town after the street ("חנקין 95 חולון"): it is taken from there and left out of the street
+    const m = b.address.match(/^(.*?\d+[א-ת]?)\s+(\D+)$/), tail = m ? words(m[2]) : [];
+    const tailTown = [...near, ...any].find(([w]) => w.length === tail.length && at(tail, w) === 0)?.[1];
+    b.city = tailTown || found(name, near) || (whole && Object.values(cities).find(c => words(c).join(' ') === whole)) || found(name, any) || found(words(written), any) || '';
+    if (tailTown && b.city === tailTown) b.address = m[1].replace(/^רח(וב|')?\s+/, '');
+    if (!b.city) b.city = written; // nothing better: the town as written is kept, never dropped
   }
 }
 
