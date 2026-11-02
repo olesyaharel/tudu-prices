@@ -4,7 +4,9 @@
 //   x    regexes; an item matching any of them is left out
 //   by   what the price is compared per: kilo, liter, unit (a pack of 18 eggs is 18 units; a 32-roll pack is 32), or pack (as sold)
 //   std  the amount counted when the list gives none (1 kg tomatoes, 1 L milk, 12 eggs)
-//   skip a reason this product isn't compared (a whole category, like "אוכל לחתולים")
+//   skip a reason this product isn't compared at all
+//   ask  a general product ("קפה", "עוגה", the brand "סנו"): not priced until the user picks what they meant, from
+//        options (more specific products defined here) and, with search, catalog products whose name matches it
 // The cheapest matching item per unit is the branch's price (any brand; the list may later pin one).
 // Run: node match.mjs <defs.json> <dir with items-<chain>.json + p-<branch>.json> <chain:branch,…> [product or dept…]
 import fs from 'node:fs';
@@ -59,7 +61,7 @@ export const matches = (def, name) => { const { q, x } = compile(def), n = clean
 
 // the branch's price for a product: the cheapest item per unit, times the standard amount
 export function priceFor(def, items, prices) {
-  if (def.skip) return null;
+  if (def.skip || def.ask) return null;
   const found = [];
   for (const [code, price] of Object.entries(prices)) {
     const it = items[code]; if (!it || price < 0.5 || !matches(def, it[0])) continue; // ₪0.01 is a placeholder, not a price
@@ -79,6 +81,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()
   for (const [name, def] of Object.entries(defs)) {
     if (only.length && !only.includes(name) && !only.includes(def.dept)) continue;
     if (def.skip) { console.log(`\n## ${name} — skip: ${def.skip}`); continue; }
+    if (def.ask) { console.log(`\n## ${name} — ask: ${def.ask} → ${def.options.join(', ')}`); continue; }
     console.log(`\n## ${name} (${def.std} ${def.by})`);
     for (const b of bs) {
       const all = Object.keys(b.prices).filter(c => b.items[c] && matches(def, b.items[c][0]));
