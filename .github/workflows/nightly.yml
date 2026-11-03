@@ -13,7 +13,7 @@ concurrency: { group: prices, cancel-in-progress: false }
 jobs:
   prices:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 150   # ~85 min with sales and matching (2026-11-03: 90 cut a run off)
     environment: { name: github-pages, url: '${{ steps.deploy.outputs.page_url }}' }
     steps:
       - uses: actions/checkout@v4
