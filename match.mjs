@@ -1,6 +1,7 @@
 // Matching a grocery-list product (generic, like "חלב 3%") to a branch's items, and its price for a standard amount.
-// A definition (defs.json, by product name): { q: [alternatives], x: [exclusions], by: 'kg'|'L'|'unit', std, skip? }
+// A definition (defs.json, by product name): { q: [alternatives], x: [exclusions], m?, by: 'kg'|'L'|'unit', std, skip? }
 //   q    regexes on the item name (quotes made plain, see clean); an item matches if any one does
+//   m    a brand or kind: regexes that must ALL be found in the item's name or its maker ("קוטג׳ תנובה": קוטג׳ + תנובה)
 //   x    regexes; an item matching any of them is left out
 //   by   what the price is compared per: kilo, liter, unit (a pack of 18 eggs is 18 units; a 32-roll pack is 32), pack (as
 //        sold), or packs (a 4-pack of wipes is 4: compared per pack, and `count` tells what the branch sells)
@@ -76,14 +77,17 @@ export function amount(item, by, std = 1, bare = false) {
   return unit === 'יחידות' && qty >= 1 && qty <= 5000 && (std <= 1 || qty > std / 10) ? qty : null;
 }
 
-const compile = def => def.re || (def.re = { q: def.q.map(s => new RegExp(s)), x: (def.x || []).map(s => new RegExp(s)) });
+const compile = def => def.re || Object.defineProperty(def, 're', { value: { q: def.q.map(s => new RegExp(s)), x: (def.x || []).map(s => new RegExp(s)),
+  m: (def.m || []).map(s => new RegExp(s)) } }).re;   // not enumerable: never written back into defs.json
 export const matches = (def, name) => { const { q, x } = compile(def), n = clean(name); return q.some(r => r.test(n)) && !x.some(r => r.test(n)); };
 
 // a chain's items that match a product, with the amount each holds (done once per chain: its branches share the items)
 export function candidates(def, items) {
   if (def.skip || def.ask) return [];
   const out = [];
+  const { m } = compile(def);
   for (const [code, it] of Object.entries(items)) if (matches(def, it[0])) {
+    if (m.length) { const nm = clean(it[0] + ' ' + (it[4] || '')); if (!m.every(r => r.test(nm))) continue; }
     const a = amount(it, def.by, def.std, def.bare); if (!a) continue;
     if (def.size && (a < def.size[0] || a > def.size[1])) continue; // a package size (water: single 1.5 L vs a six-pack)
     if (def.single && packs(it) > 1) continue;
