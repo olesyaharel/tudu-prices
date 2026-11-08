@@ -12,6 +12,7 @@
 //   skip a reason this product isn't compared at all
 //   ask  a general product ("קפה", "עוגה", the brand "סנו"): not priced until the user picks what they meant, from
 //        options (more specific products defined here) and, with search, catalog products whose name matches it
+//   also more departments whose list names may count as this product (זיתים: canned too; the app's productIn reads it)
 // The cheapest matching item per unit is the branch's price (any brand; the list may later pin one).
 // Run: node match.mjs <defs.json> <dir with items-<chain>.json + p-<branch>.json> <chain:branch,…> [product or dept…]
 import fs from 'node:fs';

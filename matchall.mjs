@@ -18,7 +18,7 @@ const started = Date.now();
 
 fs.mkdirSync(OUT + 'match', { recursive: true });
 const products = Object.fromEntries(Object.entries(defs).filter(([, d]) => !d.skip).map(([name, d]) =>
-  [name, d.ask ? { dept: d.dept, ask: d.ask, options: d.options } : { dept: d.dept, by: d.by, std: d.std }]));
+  [name, { ...(d.ask ? { dept: d.dept, ask: d.ask, options: d.options } : { dept: d.dept, by: d.by, std: d.std }), ...(d.also && { also: d.also }) }]));
 fs.writeFileSync(OUT + 'products.json', JSON.stringify(products));
 
 const priced = Object.entries(defs).filter(([, d]) => !d.skip && !d.ask);
