@@ -25,6 +25,8 @@ jobs:
       - run: node job.mjs --merge=israel
       - name: The price of every grocery-list product at every branch (defs.json, match.mjs)
         run: node matchall.mjs
+      - name: Every barcode's price at every branch, for an exact item the user picked in the app (codes.mjs)
+        run: node codes.mjs
       - name: Branches without a location (an email only when the list changes)
         run: node notify.mjs
         env: { GH_TOKEN: '${{ github.token }}' }
