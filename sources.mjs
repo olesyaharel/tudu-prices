@@ -63,17 +63,30 @@ export function salePrice(p, regular) {
   return null;
 }
 
-// Shufersal
+// Shufersal. Its file list is slow (20–30 s a page); asked per store that was ~830 pages a night (2–2.5 hours, and runs were
+// cut off), so the whole list is read once, 20 stores a page. Its links are signed for 30 minutes only, so a store whose link
+// has run out (or that isn't in the list) is looked up on its own, as before
 const SHUF = 'https://prices.shufersal.co.il/FileObject/UpdateCategory';
-const shufLinks = async (cat, store = 0) => [...(await (await get(`${SHUF}?catID=${cat}&storeId=${store}`)).text()).replace(/&amp;/g, '&').matchAll(/href="(https:\/\/[^"]+)"/g)].map(m => m[1]);
+const shufPage = async (cat, store = 0, page = 1) => (await (await get(`${SHUF}?catID=${cat}&storeId=${store}&page=${page}`)).text()).replace(/&amp;/g, '&');
+const hrefs = h => [...h.matchAll(/href="(https:\/\/[^"]+)"/g)].map(m => m[1]);
+const shufLinks = async (cat, store = 0) => hrefs(await shufPage(cat, store));
+async function shufAll(cat, kind) {
+  const first = await shufPage(cat), last = Math.max(1, ...[...first.matchAll(/[?&]page=(\d+)/g)].map(m => +m[1])), pages = [first];
+  let next = 2; await Promise.all(Array.from({ length: 6 }, async () => { while (next <= last) { const p = next++; pages[p - 1] = await shufPage(cat, 0, p).catch(() => ''); } }));
+  return latestByStore(pages.flatMap(hrefs).filter(u => u.includes(kind)), kind);
+}
+const shufFile = async (cat, kind, id, ref) => {
+  if (ref) try { return unzip(await bytes(ref)); } catch {}
+  const u = (await shufLinks(cat, id)).filter(u => u.includes(kind)).pop(); return u && unzip(await bytes(u));
+};
 const shufersal = {
   name: 'שופרסל',
   stores: async () => records(unzip(await bytes((await shufLinks(5))[0])), 'Store').map(storeRow),
-  // Shufersal lists files per store, so the store's latest link is looked up when its prices are fetched
-  files: async ids => new Map(ids.map(id => [id, null])),
-  prices: async id => { const u = (await shufLinks(2, id)).filter(u => /PriceFull/i.test(u)).pop(); if (!u) throw new Error('no PriceFull'); return itemRows(unzip(await bytes(u))); },
-  promoFiles: async ids => new Map(ids.map(id => [id, null])),
-  promos: async id => { const u = (await shufLinks(4, id)).filter(u => /PromoFull/i.test(u)).pop(); return u ? promoRows(unzip(await bytes(u))) : []; }
+  // every store gets a try, also one missing from the list (its own page is asked then)
+  files: async ids => { const m = await shufAll(2, 'PriceFull'); return new Map(ids.map(id => [id, m.get(id) || null])); },
+  prices: async (id, ref) => { const x = await shufFile(2, 'PriceFull', id, ref); if (!x) throw new Error('no PriceFull'); return itemRows(x); },
+  promoFiles: async ids => { const m = await shufAll(4, 'PromoFull'); return new Map(ids.map(id => [id, m.get(id) || null])); },
+  promos: async (id, ref) => { const x = await shufFile(4, 'PromoFull', id, ref); return x ? promoRows(x) : []; }
 };
 
 // publishedprices.co.il: each chain has a public user with an empty password
