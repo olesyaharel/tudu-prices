@@ -1,7 +1,7 @@
 // Price-transparency files from the chains' official sites. Own code; which portals exist was learned from public projects.
 // Each source gives: stores() → [{id, name, address, city, sub}], files() → Map(storeId → url-or-name of its latest PriceFull),
 // and prices(storeId, ref) → [{code, name, maker, price, qty, unit, weighted}]; promoFiles() and promos(storeId, ref) do the
-// same for the sales file (PromoFull) → the sales open to everyone today (see promoRows)
+// same for the sales file (PromoFull) → today's sales, for everyone or for a club (see promoRows)
 import { gunzipSync } from 'node:zlib';
 
 const UA = { 'User-Agent': 'TuDu-prices/1.0 (grocery list app, daily price comparison)' };
@@ -33,20 +33,35 @@ const itemRows = xml => records(xml, 'Item').concat(records(xml, 'Product')).map
 // latest file per store, from names like PriceFull7290027600007-001-105-20261101-0300.gz (City Market leaves out the sub-chain)
 const latestByStore = (names, kind = 'PriceFull') => { const m = new Map(), re = new RegExp(`${kind}\\d+-(?:\\d+-)?0*(\\d+)-(\\d{8,12})`, 'i'); for (const n of names) { const p = n.match(re); if (p && (!m.get(p[1]) || m.get(p[1]).t < p[2] + n)) m.set(p[1], { t: p[2] + n, ref: n }); } return new Map([...m].map(([k, v]) => [k, v.ref])); };
 
-// Sales (PromoFull): only what anyone can get at the till today — not club or credit-card sales, coupons, gifts, or sales
-// that need a basket total; a sale on hundreds of items at once is a store-wide coupon, not a price. Each gives the item
-// codes and what it asks: MinQty items for DiscountedPrice ("3 ב-10"), or DiscountRate % off
+// Sales (PromoFull): what one can get at the till today — not coupons, gifts, or sales that need a basket total; a sale on
+// hundreds of items at once is a store-wide coupon, not a price. Each gives the item codes and what it asks: MinQty items
+// for DiscountedPrice ("3 ב-10"), or DiscountRate % off; and who gets it (kind): everyone (none), the chain's customer club
+// ('c') or its credit card ('k'). Sales only for employees, wholesalers, VIPs, charities, partners' clubs (פז/YELLO) or club
+// tiers are left out. Chains write the club their own way: a list of groups ("3 - מועדון לקוחות & … & עובדים & …"),
+// "1=", "(2=מועדון קרפור אשראי|2=מועדון אפליקציה)", "\"מועדון לקוחות=3\"", or a bare "2" with "למשלמים בכ.מקס" in the
+// sale's words. Each group is read by its name; one customer club among them makes it a club sale (a card one when the
+// sale's words say אשראי); with no names at all, the sale's words decide
+const NOT_CUSTOMERS = /עובד|סיטונא|V\.?I\.?P|פז|YELLO|פלטינ|זהב|עמות|קרן|ארגון|בי"ח|אקים|קיבוצ/i, CARD = /אשראי|CARD|כ\.?\s?מקס|מקס ויקטורי|כרטיס/i;
+export function clubKind(clubs, desc = '') {
+  if (!clubs.length || clubs.some(c => /^0(\D|$)/.test(c))) return null;
+  const names = clubs.join('|').replace(/&amp;/g, '&').split(/[&|]/)
+    .map(g => g.replace(/["()\s]+/g, ' ').replace(/^\s*\d+\s*[-=]?\s*|\s*=?\s*\d+\s*$/g, '').trim()).filter(Boolean);
+  const card = CARD.test(desc) && !/אפליקציה/.test(desc);
+  if (!names.length) return /עובד/.test(desc) ? 'x' : card ? 'k' : 'c';
+  const kinds = names.map(g => NOT_CUSTOMERS.test(g) ? 'x' : /אפליקציה/.test(g) ? 'c' : CARD.test(g) ? 'k' : 'c');
+  return kinds.includes('c') ? (card ? 'k' : 'c') : kinds.includes('k') ? 'k' : 'x';
+}
 const tag = (b, t) => (b.match(new RegExp(`<${t}>([^<]*)</${t}>`, 'i')) || [])[1]?.trim() || '';
 export function promoRows(xml, now = new Date()) {
   const today = now.toISOString().slice(0, 10), out = [];
   for (const [, b] of xml.matchAll(/<Promotion>([\s\S]*?)<\/Promotion>/gi)) {
     const start = (tag(b, 'PromotionStartDateTime') || tag(b, 'PromotionStartDate')).slice(0, 10), end = (tag(b, 'PromotionEndDateTime') || tag(b, 'PromotionEndDate')).slice(0, 10);
     if ((start && start > today) || (end && end < today)) continue;
-    const clubs = [...b.matchAll(/<Club(?:ID|Id)>([^<]*)</gi)].map(m => m[1].trim());
-    if (clubs.length && !clubs.some(c => /^0(\D|$)/.test(c))) continue;
+    const clubs = [...b.matchAll(/<Club(?:ID|Id)>([^<]*)</gi)].map(m => m[1].trim()), kind = clubKind(clubs, tag(b, 'PromotionDescription'));
+    if (kind === 'x') continue;
     if (tag(b, 'AdditionalIsCoupon') === '1' || tag(b, 'IsGiftItem') === '1' || +tag(b, 'AdditionalGiftCount') > 0 || +tag(b, 'MinPurchaseAmount') > 0) continue;
     const codes = [...b.matchAll(/<ItemCode>([^<]+)</gi)].map(m => m[1].trim()); if (!codes.length || codes.length > 300) continue;
-    out.push({ codes, minQty: +tag(b, 'MinQty') || 1, price: +tag(b, 'DiscountedPrice') || 0, rate: +tag(b, 'DiscountRate') || 0, desc: ent(tag(b, 'PromotionDescription')) });
+    out.push({ codes, minQty: +tag(b, 'MinQty') || 1, price: +tag(b, 'DiscountedPrice') || 0, rate: +tag(b, 'DiscountRate') || 0, desc: ent(tag(b, 'PromotionDescription')), ...(kind && { kind }) });
   }
   return out;
 }

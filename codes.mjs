@@ -1,7 +1,8 @@
 // After matchall: every barcode's price at every branch, so the app can price one exact item ("ירח מתוק", the barcode the
 // user picked in the comparison's search) by downloading one small file instead of every nearby branch's price list.
 //   out/codes/<nnn>.json   nnn = the barcode's last 3 digits
-//     {code: {p: [the general products it counts as (defs.json)], b: {branch k: price | [sale price, regular price, how many to buy]}}}
+//     {code: {p: [the general products it counts as (defs.json)], b: {branch k: price | [sale price, regular price, how many to buy]},
+//             c: {branch k: {c: [club price, how many to buy], k: [price with the chain's credit card, how many]}}}   (c only where there is one)
 // Only real barcodes (7+ digits); a chain's own short codes mean different things in different chains. Run: node codes.mjs [--out=dir]
 import fs from 'node:fs';
 import path from 'node:path';
@@ -42,10 +43,12 @@ for (const b of branches) {
   const file = `${OUT}prices/${b.k}.json`; if (!fs.existsSync(file)) continue;
   const prices = JSON.parse(fs.readFileSync(file)), salesFile = `${OUT}promos/${b.k}.json`;
   const sales = fs.existsSync(salesFile) ? JSON.parse(fs.readFileSync(salesFile)) : {};
+  const clubFile = `${OUT}clubs/${b.k}.json`, club = fs.existsSync(clubFile) ? JSON.parse(fs.readFileSync(clubFile)) : {};
   for (const [code, price] of Object.entries(prices)) {
     if (!REAL.test(code) || !(price >= 0.5)) continue;   // ₪0.01 is a placeholder, not a price
     const s = sales[code];
     entry(code).b[b.k] = s ? [s[0], price, s[1]] : price; n++;
+    if (club[code]) (entry(code).c ||= {})[b.k] = Object.fromEntries(Object.entries(club[code]).map(([kd, v]) => [kd, [v[0], v[1]]]));
   }
 }
 const GENERIC = new Set(['מחלבות', 'מחלבת', 'קבוצת', 'חברת', 'תעשיות', 'מפעלי', 'בע', 'ltd', 'the']);
