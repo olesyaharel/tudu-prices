@@ -16,6 +16,12 @@ jobs:
     timeout-minutes: 150   # ~30 min since Shufersal's list is read 20 stores a page (2026-11-08); per store it was 2–2.5 hours
     environment: { name: github-pages, url: '${{ steps.deploy.outputs.page_url }}' }
     steps:
+      - name: One search in tudu-products, so Supabase never pauses it as unused (the free plan pauses after 7 quiet days)
+        continue-on-error: true
+        run: |
+          curl -sf -m 30 -o /dev/null -w "tudu-products search: %{http_code}\n" -X POST "https://mdfvznebuarkjaxgxdpq.supabase.co/rest/v1/rpc/search_products" \
+            -H "apikey: $KEY" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{"q":"חלב","n":1}'
+        env: { KEY: sb_publishable_4YK7wpFL7Irh53_F2EOLZg_JhEEUE4M }   # the app's public key (prices.js), read-only
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
