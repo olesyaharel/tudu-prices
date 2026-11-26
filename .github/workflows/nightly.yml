@@ -14,7 +14,7 @@ jobs:
   prices:
     runs-on: ubuntu-latest
     timeout-minutes: 150   # ~30 min since Shufersal's list is read 20 stores a page (2026-11-08); per store it was 2–2.5 hours
-    environment: { name: github-pages, url: '${{ steps.deploy.outputs.page_url }}' }
+    environment: { name: github-pages, url: '${{ steps.deploy.outputs.page_url || steps.deploy2.outputs.page_url }}' }
     steps:
       - name: One search in tudu-products, so Supabase never pauses it as unused (the free plan pauses after 7 quiet days)
         continue-on-error: true
@@ -43,7 +43,15 @@ jobs:
           git add geocode.json cities.json
           git diff --cached --quiet || (git commit -m "New branch locations" && git pull --rebase && git push)
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v4
         with: { path: out }
+      # The upload (~140 MB) sometimes isn't visible to the deploy step yet ("No artifacts named github-pages"),
+      # so wait a little and try once more before failing the night (runs #34, #35, #37 failed only here)
       - id: deploy
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+      - if: steps.deploy.outcome == 'failure'
+        run: sleep 60
+      - id: deploy2
+        if: steps.deploy.outcome == 'failure'
         uses: actions/deploy-pages@v4
